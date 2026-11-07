@@ -172,11 +172,59 @@ fn is_cookie_attribute(key: &str) -> bool {
 /// shape the core's jar parses. Includes the HttpOnly session cookies
 /// `document.cookie` never sees. `None` when the store has nothing for any
 /// origin (no session yet) or the read failed.
+///
+/// Platform split, and it matters: wry's `cookies_for_url` is only correct
+/// where the engine itself does the matching (WebView2 asks its cookie
+/// manager; WebKitGTK asks libsoup). On macOS wry fetches every cookie and
+/// then compares `cookie.domain() == url.domain()` as *strings* — but
+/// `NSHTTPCookie.domain` carries the `Set-Cookie` attribute verbatim
+/// (`.youtube.com`), which the cookie crate surfaces without the leading
+/// dot, while the URL's host is `music.youtube.com`. A host never equals its
+/// parent domain, so on WKWebView that filter drops every cookie a site set
+/// with a `Domain=` attribute — which is YouTube's whole session: SID, the
+/// `__Secure-1PSID`/`__Secure-3PSID` pair, the rotating `PSIDTS` pair,
+/// `LOGIN_INFO`, SAPISID. The capture came back empty, the only reports left
+/// were the shim's `document.cookie` (no HttpOnly cookies — a jar shaped like
+/// that gets "signed out" answers however correct the SAPISIDHASH is), and a
+/// completed sign-in never verified: the window stayed open and the app stayed
+/// signed out, on macOS alone. So there the whole store is read with
+/// [tauri::WebviewWindow::cookies] and matched with [domain_matches], the
+/// rules a browser applies.
 fn native_dump(window: &tauri::WebviewWindow, origins: &[(&str, &str)]) -> Option<String> {
+    // One read of the full store serves every origin on the macOS path.
+    #[cfg(target_os = "macos")]
+    let store = window.cookies().ok();
+
     let mut lines = Vec::new();
     for (origin, fallback_domain) in origins {
         let Ok(url) = origin.parse::<tauri::Url>() else { continue };
-        let Ok(cookies) = window.cookies_for_url(url) else { continue };
+        #[cfg(target_os = "macos")]
+        let host = url.host_str().unwrap_or_default().trim().to_ascii_lowercase();
+
+        #[cfg(target_os = "macos")]
+        let cookies = match store.as_ref() {
+            Some(all) => all
+                .iter()
+                // The same rule wry applies where its filter works: a secure
+                // cookie rides https only, and these origins are https.
+                .filter(|cookie| {
+                    let secure = cookie.secure().unwrap_or(false);
+                    (secure && url.scheme() == "https") || !secure
+                })
+                .filter(|cookie| {
+                    let domain = cookie.domain().unwrap_or(fallback_domain);
+                    domain_matches(domain, &host)
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let cookies = match window.cookies_for_url(url.clone()) {
+            Ok(cookies) => cookies,
+            Err(_) => continue,
+        };
+
         for cookie in &cookies {
             let name = cookie.name().trim();
             let value = cookie.value().trim();
@@ -200,6 +248,27 @@ fn native_dump(window: &tauri::WebviewWindow, origins: &[(&str, &str)]) -> Optio
     } else {
         Some(lines.join("\n"))
     }
+}
+
+/// RFC 6265 §5.1.4 domain-match, the way a browser decides which cookies a
+/// host receives: an exact match, or the host ending in the cookie's domain
+/// at a dot — `music.youtube.com` matches `.youtube.com` and itself, never
+/// `notyoutube.com`. This is the matching `cookies_for_url` stands in for on
+/// the engines that do it natively (and gets wrong on macOS, see
+/// [native_dump]).
+#[cfg(target_os = "macos")]
+fn domain_matches(cookie_domain: &str, host: &str) -> bool {
+    let domain = cookie_domain.trim().trim_start_matches('.').trim_end_matches('.').to_ascii_lowercase();
+    let host = host.trim().to_ascii_lowercase();
+    if domain.is_empty() || host.is_empty() {
+        return false;
+    }
+    if host == domain {
+        return true;
+    }
+    host.len() > domain.len()
+        && host.ends_with(&domain)
+        && host.as_bytes()[host.len() - domain.len() - 1] == b'.'
 }
 
 /// One background thread polls the agent window's native cookie store for as

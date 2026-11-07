@@ -1,30 +1,10 @@
-<div align="center">
+# BitChord for the Desktop
 
-<img src="Logo.png" alt="ForkChord app icon" width="128" />
+**BitChord** is an aesthetic YouTube Music client with clean design inspired by Apple Music — and this is it, running natively on Windows, Linux and macOS with a Rust core and the **exact same frontend** as the web app.
 
-# ForkChord
+> BitChord is not affiliated with, endorsed by, or connected to YouTube or Google in any way. It is a GPLv3 community project: use it at your own discretion.
 
-An Apple Music-inspired desktop player for YouTube Music, built on BitChord.
-
-**Windows · macOS · Linux**
-
-<p align="center">
-  <a href="https://github.com/nxfu/ForkChord"><img alt="GitHub stars" src="https://img.shields.io/github/stars/nxfu/ForkChord?style=for-the-badge&logo=github&label=Stars&labelColor=161b22&color=8b5cf6" /></a>&nbsp;
-  <a href="https://github.com/nxfu/ForkChord/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/nxfu/ForkChord/total?style=for-the-badge&logo=github&label=Downloads&labelColor=161b22&color=34d399" /></a>&nbsp;
-  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/badge/License-GPL--3.0-555?style=for-the-badge&labelColor=161b22" /></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/nxfu/ForkChord/releases/latest"><img src="assets/windows.svg" alt="Download ForkChord for Windows" width="164" height="56" /></a>&nbsp;&nbsp;
-  <a href="https://github.com/nxfu/ForkChord/releases/latest"><img src="assets/linux.svg" alt="Download ForkChord for Linux" width="164" height="56" /></a>
-</p>
-
-[Windows downloads](https://github.com/nxfu/ForkChord/releases/latest) · [Linux downloads](https://github.com/nxfu/ForkChord/releases/latest) · [macOS downloads](https://github.com/nxfu/ForkChord/releases/latest) · [All releases](https://github.com/nxfu/ForkChord/releases) · [Issues](https://github.com/nxfu/ForkChord/issues)
-
-</div>
-
-ForkChord is an independent community desktop fork of BitChord. It includes YouTube Music, local music, lossless sources, word-synced lyrics, crossfade, beat-matched Automix, downloads, and desktop media controls.
-
+---
 
 ## What this is
 
@@ -147,19 +127,6 @@ src-tauri/
 └── icons/           generated from upstream Logo.png
 ```
 
-
-## Credits
-
-ForkChord builds on the work in these projects:
-
-- [BitChord](https://github.com/kushagrasinghx/BitChord) by [@kushagrasinghx](https://github.com/kushagrasinghx) — the original open-source project and foundation for the playback engine, music integrations, and application architecture.
-- [BitChord-PC-Continued](https://github.com/LoserDenji/Bitchord-Desktop-Revived) by [@LoserDenji](https://github.com/loserdenji) and contributors — a continuation of BitChord for PC; its desktop work is part of this project's lineage.
-- [BitChord Desktop — Revived](https://github.com/Bntagaaa/BitChord-Desktop-Revived) by [@Bntagaaa](https://github.com/Bntagaaa) and contributors — an independent community continuation of BitChord's desktop app.
-
-Thank you to these maintainers and everyone who has contributed to the projects. ForkChord is independent and is not endorsed by the maintainers of the projects above.
-
 ## License
 
-ForkChord is distributed under the [GNU General Public License v3.0](LICENSE). The upstream projects above also publish their source under GPL-3.0: [BitChord](https://github.com/kushagrasinghx/BitChord/blob/main/LICENSE), [BitChord-PC-Continued](https://github.com/jackychan4891/BitChord-PC-Continued/blob/main/LICENSE), and [BitChord Desktop — Revived](https://github.com/Bntagaaa/BitChord-Desktop-Revived/blob/main/LICENSE). Their copyright notices and applicable license terms remain in effect. Third-party libraries and assets may have separate licenses.
-
-ForkChord is not affiliated with YouTube, Google, Spotify, or Apple. All trademarks belong to their respective owners.
+GPL-3.0, like BitChord. The corresponding source is this repository. Upstream: <https://github.com/kushagrasinghx/BitChord>.

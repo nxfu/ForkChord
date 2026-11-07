@@ -19,6 +19,15 @@ import { useWindowChrome } from './useWindowChrome';
  *    keep their clicks), and a double-click there toggles maximize — the
  *    caption's gestures, decided where the content lives.
  *
+ * The two halves split by platform. The buttons replace the caption the
+ * shell removed, so they draw on Windows and Linux alone; macOS keeps its
+ * traffic lights over the glass and draws nothing. The drag zone is for
+ * every desktop platform, macOS emphatically included: Overlay hides the
+ * title behind the glass, and the webview runs the full height of the
+ * window, so there is no native strip left to move the window by — without
+ * these listeners the app is parked where it opened. (useWindowChrome marks
+ * the split; the listeners are the part it turns on everywhere.)
+ *
  * The bar itself is never a hit target: it paints nothing and lets every
  * pointer event through (`pointer-events: none`), so page content scrolled
  * under it stays clickable and only the buttons receive clicks. The drag
@@ -28,9 +37,6 @@ import { useWindowChrome } from './useWindowChrome';
  * zone: that view is the app's own full-bleed stage with its own corner
  * chrome and its own way out, and a second row of window buttons floating
  * over it has nothing to do. It returns when the player closes.
- *
- * macOS renders nothing — the system's own traffic lights sit over the glass
- * — and in a plain browser there is neither window nor shell, so nothing.
  */
 
 /** How far down the window a mousedown still counts as the bar. Matches the
@@ -52,11 +58,14 @@ function press(cmd: string): void {
 }
 
 export function WindowControls() {
-  const present = useWindowChrome();
+  const { present, platform } = useWindowChrome();
   // The full-screen player is the one view that owns the whole window: while
   // it is up, the bar stands down (buttons and drag gestures alike).
   const fullScreen = useUi((s) => s.fullScreen);
   const active = present && !fullScreen;
+  // The caption buttons are the replacement for a removed native frame:
+  // Windows and Linux. macOS keeps the traffic lights it was built with.
+  const buttons = active && platform !== 'macos';
 
   useEffect(() => {
     if (!active) return;
@@ -79,7 +88,7 @@ export function WindowControls() {
     };
   }, [active]);
 
-  if (!active) return null;
+  if (!buttons) return null;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-[calc(var(--z-contextual-menus)-1)] flex justify-end">
