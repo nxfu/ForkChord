@@ -1,9 +1,9 @@
-name: Build
+name: Build & Release
 
 on:
   push:
     branches:
-      - rust-rewrite
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -11,7 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  RELEASE_TAG: v0.0.1-beta
 
 jobs:
   build:
@@ -83,3 +86,24 @@ jobs:
             src-tauri/target/*/release/bundle/**
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Release ${{ env.RELEASE_TAG }}
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ForkChord ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          files: release/**/*
