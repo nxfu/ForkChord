@@ -993,3 +993,109 @@ would have come back with any page taller than the window. It is retired:
   window's (right-5, no offset), and empty top space presses nothing;
   closing the player brings the buttons back. 14/14.
 
+# Round 9 — macOS: the sign-in that never verified, and the window that could not be moved (v1.9.5)
+
+Two reports from a Mac, one tree that had only ever been exercised on
+Windows: the Google sign-in window opens, the login goes through, YouTube
+Music opens — and then nothing. The window never closes, the app stays
+signed out; a second attempt ends in an "account error" while the settings
+page insists the browser session exists. And independently: the window
+cannot be dragged at all.
+
+## 1. The native cookie capture was empty on macOS — every session cookie was filtered out
+
+**Symptom:** sign-in completes inside the agent window (Google accepts the
+login, music.youtube.com loads), but the window stays open and the app never
+sees the session. Re-opening sign-in shows Google's account error, while the
+app considers the browser signed in (the partial session it did receive).
+
+**Cause:** `agent.rs::native_dump` reads the agent webview's *native* cookie
+store with `window.cookies_for_url(url)` for the two origins the YouTube
+session spans — and wry's `cookies_for_url` is only correct where the engine
+does its own matching. WebView2 hands the URI to its cookie manager
+(`GetCookies`), libsoup does the same for WebKitGTK. On macOS, wry 0.57.1
+fetches **every** cookie from `WKHTTPCookieStore` and then filters with a
+plain string compare:
+
+```rust
+cookie.domain() == url.domain()   // wry, src/wkwebview/mod.rs
+```
+
+`NSHTTPCookie.domain` carries the `Set-Cookie` attribute verbatim
+(`.youtube.com`), which the cookie crate surfaces without the leading dot —
+while the URL's host is `music.youtube.com`. A host is never equal to its
+parent domain, so **every cookie a site set with a `Domain=` attribute was
+dropped** — which is YouTube's whole session: `SID`/`HSID`/`SSID`,
+`__Secure-1PSID`/`__Secure-3PSID`, the rotating `PSIDTS` pair, `LOGIN_INFO`,
+`SAPISID`. The capture returned nothing; the only reports left were the
+shim's `document.cookie` fallbacks, which cannot see HttpOnly cookies — the
+exact shape Round 3 documented as "signed out answers however correct the
+SAPISIDHASH is". So the verification always failed (`fresh.signed_in ==
+false`), the close guard never fired, and the half-session that did land in
+the store (the non-HttpOnly cookies) is what made the app claim the browser
+was signed in.
+
+**Fix:** on macOS the whole store is read once with
+`tauri::WebviewWindow::cookies()` (no engine filtering at all) and matched
+per origin with the rules a browser applies — RFC 6265 §5.1.4 domain-match,
+implemented as `agent.rs::domain_matches`:
+
+```rust
+fn domain_matches(cookie_domain: &str, host: &str) -> bool {
+    let domain = cookie_domain.trim().trim_start_matches('.')
+        .trim_end_matches('.').to_ascii_lowercase();
+    let host = host.trim().to_ascii_lowercase();
+    if domain.is_empty() || host.is_empty() { return false; }
+    if host == domain { return true; }
+    host.len() > domain.len()
+        && host.ends_with(&domain)
+        && host.as_bytes()[host.len() - domain.len() - 1] == b'.'
+}
+```
+
+`music.youtube.com` receives the `.youtube.com` cookies and its own
+host-only cookies; `accounts.google.com` receives the `.google.com` half;
+`notyoutube.com` matches nothing; a secure cookie rides https only. Windows
+and Linux keep `cookies_for_url` — their engines match correctly and their
+behaviour is unchanged (the platform split is `#[cfg]`, and `domain_matches`
+is compiled on macOS alone). The dump's shape is untouched, so the core's
+`set_cookies` parser and every downstream guard run exactly as before.
+
+## 2. The window could not be moved on macOS — the drag zone was Windows/Linux-only
+
+**Symptom:** the app window cannot be dragged anywhere on screen.
+
+**Cause:** the page's drag zone lives in `WindowControls`' window-level
+mousedown listener, but the component only existed where `useWindowChrome`
+said the shell had removed the native frame — and that answer was
+deliberately `false` on macOS (`platform !== 'macos'`), on the assumption
+the native title bar still handles dragging there. It does not:
+`TitleBarStyle::Overlay` keeps the traffic lights but hides the title, and
+the webview runs the full height of the window, so there is no native strip
+left to grab. macOS ended up with neither a native drag surface nor the
+page's one.
+
+**Fix, split by the two halves of the job:**
+
+* `app/src/shell/useWindowChrome.ts` — now reports the platform alongside
+  `present`, and `present` is true on every desktop platform: it answers
+  "does the page own the title-bar gestures", which on this frameless build
+  includes macOS.
+* `app/src/shell/WindowControls.tsx` — the drag/double-click listeners
+  install wherever `present` is true (macOS included); the three caption
+  buttons render only where the frame was actually removed
+  (`platform !== 'macos'`). macOS keeps its traffic lights and gains a
+  movable window; Windows and Linux are byte-identical in behaviour.
+
+## Verification this round
+
+* `pnpm -r typecheck`: clean. `pnpm -r test`: 159/159.
+* The macOS capture was exercised in a standalone harness (rustc, `-D
+  warnings`, edition 2021): `native_dump`'s macOS branch verbatim against a
+  simulated WKWebView store of the cookies a real sign-in leaves — all 13
+  YouTube/Google session cookies captured, HttpOnly ones with their
+  attributes, each once, no cross-origin leakage (the Spotify capture sees
+  only `sp_dc`), signed-out and failed reads stay `None`; and the pre-fix
+  `cookies_for_url` filter reproduced against the same store: empty, as
+  reported. Harness in `scripts/macos_native_dump_harness.rs` of the fix
+  bundle.
