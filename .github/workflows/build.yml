@@ -1,9 +1,10 @@
+yaml
 name: Build & Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
@@ -12,9 +13,6 @@ concurrency:
 
 permissions:
   contents: write
-
-env:
-  RELEASE_TAG: v0.0.1-beta
 
 jobs:
   build:
@@ -72,8 +70,7 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      # Run the CLI from the repo root (not the app/ workspace) so Tauri can
-      # find src-tauri/tauri.conf.json.
+      # Run the CLI from the repo root so Tauri can find src-tauri/tauri.conf.json.
       - name: Build app
         run: node app/node_modules/@tauri-apps/cli/tauri.js build ${{ matrix.args }}
 
@@ -81,8 +78,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bitchord-${{ matrix.name }}
-          # Only upload installers, not the unpacked bundle directories
-          # (e.g. the AppImage AppDir), which would otherwise pollute the release.
           path: |
             src-tauri/target/release/bundle/**/*.exe
             src-tauri/target/release/bundle/**/*.msi
@@ -100,7 +95,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Release v0.0.1-beta
+    name: Release
     needs: build
     runs-on: ubuntu-22.04
     steps:
@@ -113,8 +108,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ForkChord ${{ env.RELEASE_TAG }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.1-beta' }}
+          name: ForkChord ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.1-beta' }}
           target_commitish: ${{ github.sha }}
           prerelease: true
           generate_release_notes: true
