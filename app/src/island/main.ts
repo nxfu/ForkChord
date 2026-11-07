@@ -14,14 +14,16 @@
  *
  * Behaviour: the island is BitChord's glance, not its second player. It exists
  * only while the main window is *not* focused (with focus it would repeat what
- * the app's own screen already says), folds away while nothing is playing, and
- * a new track never expands it — the card grows only under the user's own
- * click, then collapses after a few seconds. A right-click dismisses it for
- * this stretch of playback; it comes back only after the user has returned to
- * BitChord and left it again, never on a song change. The drawing follows the
- * app's own scrubber (`useScrubber`): a `--progress` transform on the fill,
- * seek on release, steady playback drawn ten times a second, drags at the
- * frame rate.
+ * the app's own screen already says), folds away when the player has nothing
+ * to show — a pause is not nothing: the pill holds its ground, play button and
+ * all — and a new track never expands it. The card grows only under the
+ * user's own click, then collapses after a few seconds. A right-click
+ * dismisses it for this stretch of playback; it comes back only after the
+ * user has returned to BitChord and left it again, never on a song change.
+ * Long titles and artists crawl instead of truncating (the tape below), and
+ * the drawing follows the app's own scrubber (`useScrubber`): a `--progress`
+ * transform on the fill, seek on release, steady playback drawn ten times a
+ * second, drags at the frame rate.
  */
 
 import { sizedArtwork } from '@/lib/artwork';
@@ -85,6 +87,93 @@ const artFrames = Array.from(document.querySelectorAll<HTMLElement>('.art'));
 
 const COLLAPSE_AFTER_MS = 5000; // Airbeats' dwell time for an expanded card
 const RESIZE_SETTLE_MS = 440; // the card's own width/height transition
+
+// ---- The tape ---------------------------------------------------------------
+
+/** Long names crawl instead of truncating. Each text line is a clipping box
+ * (.mini-title, .title, .artist) over an inline .tape that carries the words;
+ * when the words don't fit, the box gets the `scrolling` class, the distance
+ * on --tape-shift and the pace on --tape-duration, and the CSS ping-pongs the
+ * tape between its ends (island.css's tape-crawl). The box clips, so nothing
+ * is ever cut — and a name that fits never crawls. */
+const TAPE_SPEED = 24; // scrolled pixels per second: the "slowly" cadence
+/** Sub-this-much overflow is kerning dust, not a second line worth of words. */
+const TAPE_MIN_SHIFT = 4;
+
+/** A face's boxes are only measurable while the card is laid out at that
+ * face's own width — the other face is absolutely positioned over it and
+ * borrows whatever width the card currently has. Measuring the expanded
+ * card's lines while the pill is up would read the pill's 216px as their
+ * box, and the crawl would start against a lie. */
+const TAPE_FACE_WIDTH = { mini: 216, full: 432 } as const;
+
+interface Tape {
+  box: HTMLElement;
+  tape: HTMLElement;
+  /** Which face of the card the box lives on ('mini' or 'full'). */
+  face: keyof typeof TAPE_FACE_WIDTH;
+  /** The shift currently applied, so a re-measure can tell change from churn. */
+  applied: number;
+}
+
+function makeTape(id: string, face: Tape['face']): Tape {
+  const box = document.getElementById(id)!;
+  const tape = box.querySelector<HTMLElement>('.tape')!;
+  return { box, tape, face, applied: 0 };
+}
+
+const tapes = [makeTape('mini-title', 'mini'), makeTape('full-title', 'full'), makeTape('full-artist', 'full')];
+
+/** Measures one line and arms or disarms its crawl. Skipped while the card is
+ * mid-morph (the ResizeObserver below re-fires once the width settles), and
+ * restarted rather than nudged when an already-crawling tape's distance
+ * changes — a running animation can't have its keyframe distance swapped
+ * under it without a jump, but it can start over from its rest. */
+function measureTape(entry: Tape): void {
+  if (Math.abs(island.clientWidth - TAPE_FACE_WIDTH[entry.face]) > 0.5) return;
+  const shift = Math.round(entry.tape.getBoundingClientRect().width - entry.box.clientWidth);
+  const scrolling = shift >= TAPE_MIN_SHIFT;
+  if (!scrolling) {
+    entry.applied = 0;
+    entry.box.classList.remove('scrolling');
+    return;
+  }
+  // One-way is 36% of the cycle (the keyframes hold the rest), so the pace
+  // on screen stays TAPE_SPEED regardless of how far the words reach.
+  const duration = shift / (TAPE_SPEED * 0.36);
+  entry.box.style.setProperty('--tape-shift', `${-shift}px`);
+  entry.box.style.setProperty('--tape-duration', `${duration.toFixed(2)}s`);
+  if (entry.box.classList.contains('scrolling') && Math.abs(shift - entry.applied) <= 1) return;
+  entry.applied = shift;
+  entry.box.classList.remove('scrolling');
+  void entry.box.offsetWidth; // flush, so a re-armed crawl starts from its rest
+  entry.box.classList.add('scrolling');
+}
+
+function measureTapes(): void {
+  for (const entry of tapes) measureTape(entry);
+}
+
+// The card's width is transitioned, so a morph re-fires the observers frame
+// by frame until the destination width lands and the guard above lets the
+// measurement through — the crawl always settles against the real box.
+const tapeObserver = new ResizeObserver(measureTapes);
+for (const entry of tapes) tapeObserver.observe(entry.box);
+// Fonts arrive after the first paint, and a swap changes the *words'* width,
+// not the box's — the observers never see it. `fonts.ready` is not enough: it
+// can resolve before the @font-face downloads have even started (the loading
+// they trigger begins at first render), so the settle is also taken from the
+// FontFaceSet's own `loadingdone` — the event that fires when the real faces
+// finish — with the ladder as backstop for late swaps.
+if (document.fonts?.ready) {
+  void document.fonts.ready.then(() => {
+    measureTapes();
+    requestAnimationFrame(measureTapes);
+    window.setTimeout(measureTapes, 300);
+    window.setTimeout(measureTapes, 900);
+  });
+}
+document.fonts?.addEventListener?.('loadingdone', measureTapes);
 
 /** The last snapshot the shell sent. */
 let snap: Snapshot | null = null;
@@ -217,6 +306,12 @@ function applyMode(next: typeof mode): void {
         if (expandToken !== token || mode !== 'full') return;
         setClasses('full');
         if (spawning) playSpawn();
+        // The morph's width transition can drop its last ResizeObserver
+        // callback (browsers coalesce late frames), which would leave the
+        // tape's crawl distance measured against a mid-flight width. Once
+        // the transition has settled, measure against the settled box. The
+        // crawl starts 0.8s after re-arming, so this lands before it moves.
+        window.setTimeout(measureTapes, RESIZE_SETTLE_MS + 80);
       });
   } else {
     ++expandToken;
@@ -231,6 +326,8 @@ function applyMode(next: typeof mode): void {
         invoke('island_resize', { expanded: false });
       }, RESIZE_SETTLE_MS);
     }
+    // Same settle for the collapse: the mini face gets its real width back.
+    window.setTimeout(measureTapes, RESIZE_SETTLE_MS + 80);
   }
   invoke('island_overlay', { hidden: next === 'hidden' });
   lastDraw = -Infinity;
@@ -267,10 +364,13 @@ function renderMetadata(s: Snapshot): boolean {
   const key = `${s.title ?? ''}\u0000${s.artist ?? ''}\u0000${s.artworkUrl ?? ''}`;
   const changed = key !== renderedKey && Boolean(s.title || s.artworkUrl);
   renderedKey = key;
-  fullTitle.textContent = s.title ?? '';
-  fullArtist.textContent = s.artist ?? '';
-  miniTitle.textContent = s.title ?? '';
+  miniTitle.firstElementChild!.textContent = s.title ?? '';
+  fullTitle.firstElementChild!.textContent = s.title ?? '';
+  fullArtist.firstElementChild!.textContent = s.artist ?? '';
   fullTitle.title = s.title ?? '';
+  // New words, new width. Harmless when nothing changed: an armed crawl whose
+  // distance re-measures the same is left alone.
+  measureTapes();
   const src = s.artworkUrl ? sizedArtwork(s.artworkUrl, 48) : '';
   for (const img of artImages) {
     if (img.getAttribute('src') !== src) {
@@ -290,15 +390,18 @@ function renderPlayback(s: Snapshot): void {
 }
 
 /** The one policy for what the island shows, applied on every input — a media
- * sync, a focus change, the boot-time focus answer. Paused wins first (a
- * silent pill is nothing), then BitChord's own focus (the page already shows
- * everything the card would say), then a dismissal. Only when music is
- * playing, BitChord is in the background and the user hasn't sent the island
- * away does the pill exist; coming out of 'hidden' it spawns.
+ * sync, a focus change, the boot-time focus answer. Nothing to show wins first
+ * (a track-less player is nothing — no title and no artwork), then BitChord's
+ * own focus (the page already shows everything the card would say), then a
+ * dismissal. A pause is *not* nothing: the pill holds its ground with its play
+ * button, like the phone's does — only the user's own right-click sends it
+ * away mid-track. Only when there is a track, BitChord is in the background
+ * and the user hasn't dismissed the island does the card exist; coming out of
+ * 'hidden' it spawns.
  * Song changes are *not* an input: they refresh what the card shows, never
  * whether it shows. */
 function reconcile(): void {
-  if (!snap || snap.state !== 'playing') {
+  if (!snap || (!snap.title && !snap.artworkUrl)) {
     cancelCollapse();
     applyMode('hidden');
     return;

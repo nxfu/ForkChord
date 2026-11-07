@@ -30,6 +30,18 @@ const FullScreenPlayer = lazy(() => import('./FullScreenPlayer').then((m) => ({ 
 export function AppShell() {
   useKeyboardShortcuts();
   useDiscordPresence();
+  // Right-click is the app's, not the webview's: the stock menu (Reload,
+  // Inspect, Translate…) has no function here and reads as a bug over the
+  // glass. One capture-phase listener on the document covers every corner of
+  // the page — including inputs and portals, which bubble handlers would
+  // miss. The two exceptions re-arm themselves before this ever matters: a
+  // song row (TrackList, Up Next) opens its own ⋯ menu at the cursor, and the
+  // dynamic island is its own webview with its own right-click-to-dismiss.
+  useEffect(() => {
+    const block = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener('contextmenu', block, true);
+    return () => document.removeEventListener('contextmenu', block, true);
+  }, []);
   // Listen Together: pick a party back up after a reload, and keep the player in step with it.
   useEffect(() => {
     resumeSession();

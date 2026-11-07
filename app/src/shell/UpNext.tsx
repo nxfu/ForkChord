@@ -27,8 +27,12 @@ function Row({
 }) {
   const { jumpTo, removeAt, playNext } = usePlayer.getState();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [contextPoint, setContextPoint] = useState<{ x: number; y: number } | null>(null);
   const [over, setOver] = useState(false);
-  const close = useCallback(() => setAnchor(null), []);
+  const close = useCallback(() => {
+    setAnchor(null);
+    setContextPoint(null);
+  }, []);
   const { track } = entry;
 
   return (
@@ -52,6 +56,13 @@ function Row({
         onDropAt(at);
       }}
       onDoubleClick={() => jumpTo(at)}
+      // Right-click: the row's ⋯ menu at the cursor, like the track lists' rows
+      // (AppShell blocks the stock webview menu everywhere else).
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setContextPoint({ x: event.clientX, y: event.clientY });
+      }}
     >
       <div className="relative size-10">
         <Artwork src={track.thumbnail} displayWidth={40} radius="var(--radius-artwork-small)" />
@@ -74,14 +85,14 @@ function Row({
           className="absolute inset-y-0 right-0 my-auto hidden size-7 place-items-center rounded-full text-key group-hover/row:grid data-open:grid"
           aria-label={`More options for ${track.title}`}
           aria-haspopup="menu"
-          data-open={anchor !== null || undefined}
+          data-open={anchor !== null || contextPoint !== null || undefined}
           onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
         >
           <MoreHorizontal size={16} />
         </button>
       </div>
-      {anchor && (
-        <Menu anchor={anchor} onClose={close} label={track.title}>
+      {(anchor || contextPoint) && (
+        <Menu anchor={anchor ?? contextPoint!} placement={anchor ? undefined : 'below-start'} onClose={close} label={track.title}>
           <MenuItem onSelect={() => (close(), jumpTo(at))}>Play Now</MenuItem>
           <MenuItem
             onSelect={() => {

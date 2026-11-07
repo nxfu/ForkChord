@@ -1,4 +1,5 @@
-import { ListMusic, Settings } from 'lucide-react';
+import { ChevronLeft, ListMusic, Settings } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router';
 import { PrefetchLink, PrefetchNavLink } from '@/components/PrefetchLink';
 import { LogoMark } from '@/components/icons/LogoMark';
 import {
@@ -130,6 +131,12 @@ function SpotifyNav({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
+// The sidebar's back button, styled like the settings button it sits opposite
+// (a ghost icon that fills on hover); disabled while the app's history is
+// still on its first page.
+const back =
+  'grid size-7 flex-none place-items-center rounded-nav text-secondary hover:bg-quinary hover:text-primary disabled:pointer-events-none disabled:opacity-35';
+
 /** The left glass sidebar (report §1). */
 export function Sidebar() {
   const drawerOpen = useUi((s) => s.drawerOpen);
@@ -137,6 +144,13 @@ export function Sidebar() {
   const signedIn = useSignedIn();
   const spotifySignedIn = useSpotifySignedIn();
   const close = () => setDrawerOpen(false);
+  const navigate = useNavigate();
+  // Subscribing to the location keeps the depth check honest: the sidebar
+  // re-renders on every navigation, including back and forward.
+  useLocation();
+  // react-router stamps the depth into every entry's history.state; the
+  // button sleeps until there is somewhere to go back to.
+  const canGoBack = typeof window.history.state?.idx === 'number' && window.history.state.idx > 0;
 
   return (
     <>
@@ -150,8 +164,22 @@ export function Sidebar() {
             app's brand in the app's own navigation, not a window-bar title.
             (It's the frameless window's top edge that stays brandless: the
             transparent top bar carries only the window buttons.) The block's
-            height also keeps the macOS traffic lights their air. */}
-        <div className="mt-2 ml-2 flex h-18 items-center px-5">
+            height also keeps the macOS traffic lights their air. The back
+            chevron rides the same row, macOS-style, over the brand's air. */}
+        <div className="mt-2 ml-2 flex h-18 items-center gap-1.5 px-5">
+          <button
+            type="button"
+            className={back}
+            aria-label="Back"
+            title="Back"
+            disabled={!canGoBack}
+            onClick={() => {
+              navigate(-1);
+              close();
+            }}
+          >
+            <ChevronLeft size={19} strokeWidth={2} />
+          </button>
           <PrefetchLink to="/home" className="inline-flex items-center gap-2 rounded-[6px]" aria-label="BitChord, Home" onClick={close}>
             {/* White on dark, as Apple's own wordmark; it follows the label colour so it stays visible in light. */}
             <LogoMark size={22} className="text-primary" />

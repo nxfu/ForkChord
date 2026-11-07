@@ -98,13 +98,18 @@ function TrackMenuItems({ track, onClose }: { track: Track; onClose: () => void 
 
 /**
  * The ⋯ button at the end of a track row (report §14): Play Next and Add to
- * Queue for everyone; Favorite and Add to Playlist signed in.
+ * Queue for everyone; Favorite and Add to Playlist signed in. The same menu
+ * also serves the row's right-click: `contextPoint` carries the click's
+ * cursor position and the menu opens there instead of the button, like a
+ * native context menu.
  */
 export function TrackMenu({
   track,
   className,
   placement,
   onOpenChange,
+  contextPoint,
+  onContextClose,
 }: {
   track: Track;
   className?: string;
@@ -112,30 +117,45 @@ export function TrackMenu({
   placement?: MenuPlacement;
   /** Told when the menu opens and closes; most mounts don't need to know. */
   onOpenChange?: (open: boolean) => void;
+  /** The right-click's cursor position; set while the cursor menu is open. */
+  contextPoint?: { x: number; y: number } | null;
+  /** Told to close the cursor menu (the same onClose for every path). */
+  onContextClose?: () => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const close = useCallback(() => setAnchor(null), []);
+  const close = useCallback(() => {
+    setAnchor(null);
+    onContextClose?.();
+  }, [onContextClose]);
+  const fromCursor = contextPoint ?? null;
+  const open = anchor !== null || fromCursor !== null;
   useEffect(() => {
-    onOpenChange?.(anchor !== null);
-  }, [anchor, onOpenChange]);
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
   return (
     <>
       <button
         className={className}
         aria-label={`More options for ${track.title}`}
         aria-haspopup="menu"
-        aria-expanded={anchor !== null}
-        data-open={anchor !== null || undefined}
+        aria-expanded={open}
+        data-open={open || undefined}
         onClick={(event) => {
           event.stopPropagation();
           setAnchor(anchor ? null : event.currentTarget);
         }}
         onDoubleClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.stopPropagation()}
       >
         <MoreHorizontal size={18} strokeWidth={2} />
       </button>
-      {anchor && (
-        <Menu anchor={anchor} placement={placement} onClose={close} label={track.title}>
+      {(anchor || fromCursor) && (
+        <Menu
+          anchor={anchor ?? fromCursor!}
+          placement={anchor ? placement : 'below-start'}
+          onClose={close}
+          label={track.title}
+        >
           <TrackMenuItems track={track} onClose={close} />
         </Menu>
       )}

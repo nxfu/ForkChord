@@ -98,6 +98,11 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
   const togglePlay = usePlayer((s) => s.togglePlay);
   const unavailable = track.unavailable;
   const onPlay = () => (unavailable ? undefined : current ? togglePlay() : onPlayRow());
+  // Right-click opens the row's ⋯ menu at the cursor, like a native context
+  // menu. The app blocks the stock webview menu everywhere (AppShell); the
+  // stopPropagation keeps the row's own menu from racing that blocker, and
+  // preventDefault is belt and braces on top of it.
+  const [contextPoint, setContextPoint] = useState<{ x: number; y: number } | null>(null);
 
   return (
     <div
@@ -107,6 +112,15 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
       data-unavailable={unavailable}
       title={unavailable === 'matching' ? 'Looking for this on YouTube Music…' : unavailable === 'missing' ? 'Not found on YouTube Music' : undefined}
       onDoubleClick={onPlay}
+      onContextMenu={
+        unavailable
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setContextPoint({ x: event.clientX, y: event.clientY });
+            }
+      }
     >
       <div className={`${cell} gap-3`}>
         <div className={`relative grid w-10 shrink-0 place-items-center${variant === 'playlist' ? ' ms-[7px]' : ''}`}>
@@ -189,6 +203,8 @@ function Row({ track, variant, position, fallbackArtwork, onPlayRow }: RowProps)
           <TrackMenu
             track={track}
             className="absolute end-2.5 hidden size-7 place-items-center rounded-full text-key group-focus-within/row:grid group-hover/row:grid hover:bg-quinary data-open:grid"
+            contextPoint={contextPoint}
+            onContextClose={() => setContextPoint(null)}
           />
         )}
       </div>

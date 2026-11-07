@@ -1099,3 +1099,133 @@ page's one.
   `cookies_for_url` filter reproduced against the same store: empty, as
   reported. Harness in `scripts/macos_native_dump_harness.rs` of the fix
   bundle.
+
+## Round — v1.9.5 follow-up: the island's morph, a pause that dismisses, truncated names, right-click, and a sidebar back button
+
+### 1. The expand/collapse morph still read in two steps on macOS ("centre-left, then centre")
+
+**Symptom:** expanding the pill first shuffled it sideways before it grew;
+collapsing turned it mini at a spot left of centre and then walked it home —
+the same report the Windows build had, even after the atomic `SetWindowPos`
+there.
+
+**Cause:** the Windows fix made the *Windows* geometry atomic, but macOS and
+Linux kept the two-call path in `island.rs::apply_geometry`, whose comment
+argued the calls run "one frame apart at worst". On macOS that is not what
+happens: tao's `set_size` is an *asynchronous* `setContentSize:` and
+`set_position` an asynchronous `setFrameOrigin:` — each dispatched separately
+onto the main thread even when asked from it — and `setContentSize:` pins the
+window's bottom-left origin, so the shrinking 432→216 window parked the mini
+pill left of centre for a presented frame before `recenter` moved it. Two
+painted frames, the exact reported two-step.
+
+**Fix (`src-tauri/src/island.rs`, `src-tauri/Cargo.toml`):** every platform
+now moves and resizes in one atomic primitive, with the card's top-centre
+pinned (both states hang from the same top-centre point, so the pin is read
+straight off the current frame — no monitor math, no scale factor):
+
+* **macOS** — one NSWindow `setFrame:display:` message (objc2, already in
+  Cargo.lock via tao/wry; pinned 0.6.5 / 0.3.2, no second copy), with
+  `display: false` so the frame change coalesces into the same update cycle
+  the webview's first grown frame rides in. Falls back to the old two-call
+  path only if the raw handle is unavailable.
+* **Linux** — `gdk_window_move_resize`, which carries position and size in
+  one request (one X11 ConfigureWindow), instead of gtk's two server
+  round-trips; same fallback. (gtk 0.18.2, what tauri already pins.)
+* **Windows** — unchanged (the existing atomic `SetWindowPos`).
+
+The page-side choreography (`island/main.ts::applyMode`: grow the window
+first, morph the card second, shrink the window after the card settles) is
+untouched — with the geometry atomic there is no intermediate frame left to
+paint, so the card morphs as one motion in both directions.
+
+### 2. Pausing dismissed the island
+
+**Symptom:** pressing pause (from the island's own button or anywhere else)
+made the island fold away entirely; it only came back when playback resumed.
+
+**Cause:** `island/main.ts::reconcile` treated "not playing" the same as
+"nothing to show": `snap.state !== 'playing'` went straight to `hidden`.
+
+**Fix:** the policy now separates the two. A pause is *not* nothing — the
+pill holds its ground with its play button, like the phone's does, and only
+a track-less player (no title and no artwork), BitChord being focused, or a
+right-click dismissal hides it. Song changes and seek drags still never
+decide visibility. Position and remaining time hold where the pause left
+them (`livePosition` already did).
+
+### 3. Long titles and artists were cut off with "…"
+
+**Symptom:** the mini pill and the expanded card truncated the song title
+and artist with an ellipsis; there was no way to read the rest of the name.
+
+**Fix (island.html, island.css, island/main.ts):** every text line is now a
+clipping box over an inner `.tape` that carries the words. `main.ts` measures
+the overflow whenever the words, the box, or the fonts change and, when there
+is any, arms a slow ping-pong crawl (`tape-crawl` in `island.css`): out at a
+steady 24 px/s, a rest long enough to read the ending, back, a rest at the
+start. A name that fits never crawls; nothing is ever cut. The crawl distance
+is re-measured on every trigger that can move the ground under it — the card's
+morph (ResizeObserver during the width transition, plus one measure at the
+morph's settle), a font swap (`loadingdone`, since `fonts.ready` can resolve
+before the @font-face downloads even start, plus a short ladder as backstop),
+each metadata sync, and a change of text — and an armed crawl whose distance
+re-measures the same is left alone. Face measurements are guarded by the
+card's current width, so the expanded card's lines are never measured against
+the pill's 216px (or the reverse) while the other face is laid out. Reduced
+motion keeps the overflow clipped and still.
+
+### 4. Right-click: the stock webview menu everywhere; songs got nothing
+
+**Symptom:** right-clicking anywhere opened the webview's own menu (Reload,
+Inspect…) — no function, ugly over the glass — while right-clicking a song
+offered nothing either.
+
+**Fix:**
+
+* `app/src/shell/AppShell.tsx` — one capture-phase `contextmenu` listener on
+  the document preventDefaults the stock menu across every corner of the
+  page (inputs and portals included, which bubble-phase handlers would miss).
+* `app/src/components/Menu.tsx` — the menu's anchor may now be a *point* as
+  well as an element, with a `below-start` placement: the panel opens at the
+  cursor, clamped inside the window at both edges, and flips above the
+  pointer (left edge kept at the pointer) when it doesn't fit below. Element
+  anchors keep their exact old placements.
+* `app/src/components/music/TrackMenu.tsx` — a `contextPoint` prop opens the
+  same Play Next / Add to Queue / Favorite / Add to Playlist menu at the
+  right-click's cursor instead of the ⋯ button.
+* `app/src/components/music/TrackList.tsx`, `app/src/shell/UpNext.tsx` —
+  album/playlist rows and Up Next rows open their ⋯ menu at the cursor on
+  right-click (unavailable rows keep nothing).
+* The dynamic island is untouched: it is its own webview, and its
+  right-click-to-dismiss lives in `island/main.ts`, which this page's
+  listeners can never reach.
+
+### 5. No way back — the sidebar had no back button
+
+**Fix (`app/src/shell/Sidebar.tsx`):** a chevron button rides the wordmark
+row, styled like the settings button it mirrors. It calls `navigate(-1)`,
+stays disabled while the app's history is still on its first page (react-
+router stamps the depth into every entry's `history.state`), re-checks on
+every navigation, and closes the mobile drawer when it fires.
+
+## Verification this round
+
+* `pnpm --filter @bitchord/app typecheck`: clean. `pnpm --filter @bitchord/app
+  test`: 159/159. `vite build`: clean.
+* The macOS geometry core was compiled verbatim in a standalone scratch crate
+  against objc2 0.6.5 / objc2-foundation 0.3.2 for `aarch64-apple-darwin`:
+  clean, no warnings (a full `cargo check --target aarch64-apple-darwin` of
+  the shell itself needs a macOS SDK for `objc2-exception-helper`, which only
+  a Mac build has). The Linux path's API usage was verified line-by-line
+  against the gtk-rs 0.18.2 sources in the lock (`WidgetExt::window`,
+  `gdk::Window::{position, width, move_resize}` — all inherent or prelude
+  methods with the exact signatures used).
+* The island page was exercised in a browser against the dev server: mini
+  crawl distance converged to the measured overflow (±0px) with fonts loaded;
+  paused kept the pill; a track-less snapshot hid it; right-click dismissed
+  it and the dismissal held through paused syncs until a focus cycle re-armed
+  it; expand measured the full card's lines at the settled width. The menu
+  point-anchor placement was exercised the same way: at the cursor, clamped
+  at the right edge (x = innerWidth − 185 − 8), flipped above near the bottom
+  with the left edge kept at the pointer.

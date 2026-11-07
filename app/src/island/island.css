@@ -309,7 +309,6 @@ body {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
   font: 600 13px/16px var(--font); /* type-body-emphasized */
 }
 
@@ -346,16 +345,51 @@ body {
 .title {
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
   font: 600 13px/16px var(--font); /* type-body-emphasized */
 }
 
 .artist {
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
   font: 500 12px/15px var(--font); /* type-callout-medium */
   color: var(--secondary);
+}
+
+/* ---- The tape ------------------------------------------------------------ */
+
+/* Long names crawl instead of truncating: each text line is a clipping box
+   (.mini-title, .title, .artist) over an inline .tape that carries the words.
+   main.ts measures the overflow whenever the words or the box change and, when
+   there is any, sets the distance on --tape-shift and the pace on
+   --tape-duration, then the tape ping-pongs between its ends — out, a rest
+   long enough to read the ending, back, a rest at the start. The box clips;
+   nothing is ever cut. */
+.tape {
+  display: inline-block;
+  white-space: nowrap;
+  vertical-align: top;
+  will-change: transform;
+}
+
+.island.mini .mini-title.scrolling .tape,
+.island.full .title.scrolling .tape,
+.island.full .artist.scrolling .tape {
+  animation: tape-crawl var(--tape-duration, 20s) linear 0.8s infinite;
+}
+
+@keyframes tape-crawl {
+  0%,
+  8% {
+    transform: translateX(0);
+  }
+  44%,
+  56% {
+    transform: translateX(var(--tape-shift, 0px));
+  }
+  92%,
+  100% {
+    transform: translateX(0);
+  }
 }
 
 /* ---- Full: the seek line ------------------------------------------------ */
@@ -475,5 +509,11 @@ body {
     transition-delay: 0s !important;
     animation-duration: 0.01s !important;
     animation-delay: 0s !important;
+  }
+
+  /* The crawl is motion for its own sake; reduced motion keeps the overflow
+     clipped at the start instead (nothing overflows the box visibly). */
+  .tape {
+    animation: none !important;
   }
 }

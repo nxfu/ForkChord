@@ -185,6 +185,79 @@ pub fn apply_size(app: &AppHandle, expanded: bool) {
 /// "centre-left, then centre" two-step. One atomic `SetWindowPos` that carries
 /// position and size together cannot have a frame between them, because there
 /// is no *between*: it is a single WM_WINDOWPOSCHANGED.
+///
+/// macOS has the same disease, one floor up: tao's `set_size` is an async
+/// `setContentSize:` (bottom-left origin anchored) and `set_position` an async
+/// `setFrameOrigin:`, each queued separately onto the main thread even when
+/// asked from it — two presented frames, the same two-step. So the island
+/// never calls them; it sends NSWindow one `setFrame:display:` carrying both.
+/// Both states hang from the same top-centre point, so the pin is read straight
+/// off the current AppKit frame — no monitor math, no scale factor, no
+/// coordinate flipping, and correct on every display the island already sits
+/// on. `display: false` defers the redraw into the same update cycle the
+/// webview's first grown frame rides in.
+#[cfg(target_os = "macos")]
+fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
+    use objc2::msg_send;
+    use objc2::runtime::NSObject;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let atomic = (|| -> Option<()> {
+        let ns_window = window.ns_window().ok()? as *mut NSObject;
+        if ns_window.is_null() {
+            return None;
+        }
+        // AppKit frame: origin is the bottom-left corner, y grows upward,
+        // all in points (logical pixels).
+        let frame: NSRect = unsafe { msg_send![ns_window, frame] };
+        if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+            return None; // an unfitted window has no pin worth trusting
+        }
+        let centre_x = frame.origin.x + frame.size.width / 2.0;
+        let top_y = frame.origin.y + frame.size.height;
+        let new_frame = NSRect::new(
+            NSPoint::new(centre_x - width / 2.0, top_y - height),
+            NSSize::new(width, height),
+        );
+        let _: () = unsafe { msg_send![ns_window, setFrame: new_frame, display: false] };
+        Some(())
+    })();
+    // No raw handle (should not happen): the old two-step path is better
+    // than no resize at all.
+    if atomic.is_none() {
+        let _ = window.set_size(LogicalSize::new(width, height));
+        recenter(window, width);
+    }
+}
+
+/// Linux: gdk_window_move_resize carries position and size in one request —
+/// one X11 ConfigureWindow, nothing to paint between — where gtk's move and
+/// resize are two server round-trips a WM can present apart, the same
+/// two-step. Coordinates stay inside one API (gdk's own root space, logical
+/// pixels), so the current centre reads straight from the window. On Wayland
+/// the move is advisory as ever; sizing still applies, as it did before.
+#[cfg(target_os = "linux")]
+fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
+    use gtk::prelude::WidgetExt;
+
+    let atomic = window
+        .gtk_window()
+        .ok()
+        .and_then(|gtk_window| gtk_window.window())
+        .map(|gdk_window| {
+            let (x, y) = gdk_window.position();
+            let centre_x = f64::from(x) + f64::from(gdk_window.width()) / 2.0;
+            let new_x = (centre_x - width / 2.0).round() as i32;
+            gdk_window.move_resize(new_x, y, width.round() as i32, height.round() as i32);
+        });
+    if atomic.is_none() {
+        let _ = window.set_size(LogicalSize::new(width, height));
+        recenter(window, width);
+    }
+}
+
+/// Windows: see the doc comment on [apply_geometry] — one atomic
+/// SetWindowPos that carries position and size together.
 #[cfg(target_os = "windows")]
 fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
     use windows::Win32::Foundation::HWND;
@@ -215,15 +288,6 @@ fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
             recenter(window, width);
         }
     }
-}
-
-/// macOS and Linux have no atomic move+resize through Tauri's API; the two
-/// calls run back to back on the main thread, which is one frame apart at
-/// worst and has not shown a seam there.
-#[cfg(not(target_os = "windows"))]
-fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
-    let _ = window.set_size(LogicalSize::new(width, height));
-    recenter(window, width);
 }
 
 /// While hidden the pill must not block what is under it — a transparent

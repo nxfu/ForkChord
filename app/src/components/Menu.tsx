@@ -2,17 +2,30 @@ import { Check } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-export type MenuPlacement = 'above-start' | 'above-end' | 'below-end';
+export type MenuPlacement = 'above-start' | 'above-end' | 'below-end' | 'below-start';
+
+/** Where the menu opens from: an element, or the point a right-click landed
+ * on — the cursor menus open at the pointer, like a native context menu. */
+export type MenuAnchor = HTMLElement | { x: number; y: number };
 
 interface MenuProps {
-  /** The element the menu opens from. */
-  anchor: HTMLElement;
+  /** The element the menu opens from, or the point it opens at. */
+  anchor: MenuAnchor;
   placement?: MenuPlacement;
   onClose: () => void;
   label: string;
   /** At least as wide as the anchor (a pop-up button's menu). */
   matchWidth?: boolean;
   children: ReactNode;
+}
+
+/** Reads a uniform rect out of either anchor kind; a point is a zero rect. */
+function anchorRect(anchor: MenuAnchor): { left: number; right: number; top: number; bottom: number; width: number } {
+  if (anchor instanceof HTMLElement) {
+    const rect = anchor.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width };
+  }
+  return { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y, width: 0 };
 }
 
 /**
@@ -25,21 +38,44 @@ export function Menu({ anchor, placement = 'below-end', onClose, label, matchWid
   const [position, setPosition] = useState<React.CSSProperties>({ visibility: 'hidden' });
 
   useLayoutEffect(() => {
-    const rect = anchor.getBoundingClientRect();
+    const rect = anchorRect(anchor);
     const gap = 6;
     const width = matchWidth ? { minWidth: rect.width } : {};
     const above = { bottom: window.innerHeight - rect.top + gap, maxHeight: rect.top - 2 * gap, ...width };
+    // A cursor menu flips above the pointer when the panel doesn't fit below
+    // it, the way a native one does. The panel's own height is known here —
+    // the layout effect runs after the content is in the DOM.
+    const flip =
+      placement === 'below-start' &&
+      !(anchor instanceof HTMLElement) &&
+      (panel.current?.offsetHeight ?? 0) > window.innerHeight - rect.bottom - 2 * gap;
     setPosition(
       placement === 'above-start'
         ? { left: Math.max(8, rect.left), ...above }
-        : placement === 'above-end'
-          ? { right: Math.max(8, window.innerWidth - rect.right), ...above }
-          : {
-              right: Math.max(8, window.innerWidth - rect.right),
-              top: rect.bottom + gap,
-              maxHeight: window.innerHeight - rect.bottom - 2 * gap,
-              ...width,
-            },
+        : flip
+          ? // The cursor menu's flip: vertical only, the left edge stays at
+            // the pointer, clamped inside the window like the unflipped case.
+            {
+              left: Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - 193)),
+              ...above,
+            }
+          : placement === 'above-end'
+            ? { right: Math.max(8, window.innerWidth - rect.right), ...above }
+            : placement === 'below-start'
+              ? {
+                  // A point menu keeps the panel inside the window even when the
+                  // pointer sits at the right edge (the panel is 185–300px wide).
+                  left: Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - 193)),
+                  top: rect.bottom + gap,
+                  maxHeight: window.innerHeight - rect.bottom - 2 * gap,
+                  ...width,
+                }
+              : {
+                  right: Math.max(8, window.innerWidth - rect.right),
+                  top: rect.bottom + gap,
+                  maxHeight: window.innerHeight - rect.bottom - 2 * gap,
+                  ...width,
+                },
     );
   }, [anchor, placement, matchWidth]);
 
@@ -49,7 +85,7 @@ export function Menu({ anchor, placement = 'below-end', onClose, label, matchWid
       if (event.key === 'Escape') {
         event.stopPropagation();
         onClose();
-        anchor.focus();
+        if (anchor instanceof HTMLElement) anchor.focus();
       } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const items = [...(panel.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? [])];

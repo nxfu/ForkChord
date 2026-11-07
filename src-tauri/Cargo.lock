@@ -299,7 +299,10 @@ name = "bitchord-desktop"
 version = "1.9.5"
 dependencies = [
  "bitchord-core",
+ "gtk",
  "log",
+ "objc2",
+ "objc2-foundation",
  "regex",
  "serde",
  "serde_json",

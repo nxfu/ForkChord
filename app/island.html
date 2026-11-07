@@ -33,7 +33,9 @@
             />
           </svg>
         </span>
-        <span class="mini-title" id="mini-title"></span>
+        <!-- The .tape inside each text line is what crawls when the words
+             don't fit (island.css's tape-crawl); the line itself only clips. -->
+        <span class="mini-title" id="mini-title"><span class="tape"></span></span>
         <span class="mini-remaining" id="mini-remaining"></span>
       </div>
 
@@ -51,8 +53,8 @@
             </svg>
           </button>
           <span class="meta">
-            <span class="title" id="full-title"></span>
-            <span class="artist" id="full-artist"></span>
+            <span class="title" id="full-title"><span class="tape"></span></span>
+            <span class="artist" id="full-artist"><span class="tape"></span></span>
           </span>
         </div>
 

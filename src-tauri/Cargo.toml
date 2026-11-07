@@ -33,6 +33,23 @@ bitchord-core = { path = "core" }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
+# The same story on macOS, where tao's set_size (setContentSize:, bottom-left
+# anchored) and set_position (setFrameOrigin:) are two async main-thread
+# dispatches — two presented frames, the same "centre-left, then centre"
+# morph. The island moves and resizes in one NSWindow setFrame:display:
+# instead. objc2 is already in Cargo.lock (tao/wry pull it); pinned to the
+# same versions, this adds no second copy.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }
+
+# And on Linux: gdk_window_move_resize carries position and size in one
+# request (one X11 ConfigureWindow), where gtk's move + resize are two
+# server round-trips the WM can paint between. gtk 0.18 is what tauri
+# already pins in Cargo.lock.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
+
 [workspace]
 members = ["core"]
 resolver = "2"
