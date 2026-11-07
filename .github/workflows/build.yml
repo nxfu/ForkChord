@@ -1,7 +1,6 @@
-yaml
 name: Build & Release
 
-on:
+'on':
   push:
     tags:
       - 'v*'
