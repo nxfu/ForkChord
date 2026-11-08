@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { AppleMotion } from '@/data/apple/motionArt';
 
 const nativeHls = () => document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== '';
@@ -12,10 +12,30 @@ const nativeHls = () => document.createElement('video').canPlayType('application
  * second rendition is tried once when the first won't. [playing] false holds
  * it on its frame, as the music is paused.
  */
-export function MotionArtwork({ motion, className, playing = true }: { motion: AppleMotion; className?: string; playing?: boolean }) {
+export function MotionArtwork({
+  motion,
+  className,
+  playing = true,
+  videoRef,
+}: {
+  motion: AppleMotion;
+  className?: string;
+  playing?: boolean;
+  /**
+   * Receives the clip's own <video> while this component has it, for callers
+   * that sample its frames (FullScreenPlayer's MotionAmbience) instead of
+   * paying for a second copy of the stream.
+   */
+  videoRef?: RefObject<HTMLVideoElement | null>;
+}) {
   const video = useRef<HTMLVideoElement>(null);
   const [url, setUrl] = useState(motion.url);
   const [ready, setReady] = useState(false);
+  // Both refs at once: the component's own, and the caller's, if it asked.
+  const setVideo = (el: HTMLVideoElement | null) => {
+    video.current = el;
+    if (videoRef) videoRef.current = el;
+  };
 
   useEffect(() => {
     setUrl(motion.url);
@@ -68,7 +88,7 @@ export function MotionArtwork({ motion, className, playing = true }: { motion: A
 
   return (
     <video
-      ref={video}
+      ref={setVideo}
       className={className}
       data-ready={ready || undefined}
       muted

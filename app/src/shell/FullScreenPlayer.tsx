@@ -18,6 +18,7 @@ import { FavoriteButton } from '@/components/music/FavoriteButton';
 import { TrackMenu } from '@/components/music/TrackMenu';
 import { albumHref } from '@/components/music/links';
 import { MotionArtwork } from '@/components/music/MotionArtwork';
+import { MotionAmbience } from '@/components/music/MotionAmbience';
 import { VideoSurface } from '@/components/music/VideoSurface';
 import { useTrackMotion } from '@/data/apple/motionArt';
 import { sizedArtwork } from '@/lib/artwork';
@@ -150,6 +151,10 @@ export function FullScreenPlayer() {
   });
   // Apple's animated sleeve over the cover, as the phone's now-playing shows it.
   const motion = useTrackMotion(nowPlaying?.title, nowPlaying?.artist, track?.album?.name);
+  // The sleeve's playing <video>, handed over by MotionArtwork, for the
+  // animated ambience to mirror — the glow follows the clip's frames, not
+  // the still, at the cost of a few 32px copies a frame.
+  const motionVideo = useRef<HTMLVideoElement | null>(null);
   const { pathname } = useLocation();
   const openedAt = useRef(pathname);
   const playing = usePlayer((s) => s.status === 'playing' || s.status === 'buffering');
@@ -307,17 +312,40 @@ export function FullScreenPlayer() {
               instead of veiling them. It must also stay out of the sleeve's
               box, whose pause shrink (scale-92) would otherwise trap it in
               a stacking context that lifts the whole box over that text
-              whenever the music is paused. */}
+              whenever the music is paused. Its box is the cover's own size
+              again on every side (-inset-[100%], double the reach the r4
+              wash had): the report was that half a cover-length of glow
+              died too close to the artwork, so the falloff now has a full
+              cover-length of room to die in — the visible light reaches
+              about twice as far before it ends. The explicit h-[300%]
+              w-[300%] matters as much as the inset: an img (or canvas) is
+              a replaced element, and a replaced element positioned with
+              only inset keeps its INTRINSIC size — the r4 wash never
+              stretched to its -inset-[45%] box, it sat at the artwork
+              thumb's own 120px up the sleeve's top-left corner, which is
+              why the glow died within a hand's width of the cover. */}
           <div className={`relative w-(--art)${column ? ' max-md:hidden' : ''}${theater ? ' hidden' : ''}`}>
             {nowPlaying.artworkUrl && (
               <img
                 key={`ambience-wash-${nowPlaying.artworkUrl}`}
-                className="wash-mask pointer-events-none absolute -inset-[45%] -z-1 object-cover opacity-0 blur-[90px] saturate-[1.6] transition-opacity duration-500 ease-in data-loaded:opacity-50"
+                className="wash-mask pointer-events-none absolute -inset-[100%] -z-1 h-[300%] w-[300%] object-cover opacity-0 blur-[90px] saturate-[1.6] transition-opacity duration-500 ease-in data-loaded:opacity-50"
                 src={sizedArtwork(nowPlaying.artworkUrl, 120)}
                 alt=""
                 referrerPolicy="no-referrer"
                 decoding="async"
                 onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
+              />
+            )}
+            {/* The wash for the animated sleeve: the same layer, painted
+                from the clip's own frames once the clip plays (it covers
+                the static wash completely, so the glow switches from the
+                still's colours to the motion's as the video fades in). */}
+            {motion && (
+              <MotionAmbience
+                key={`ambience-motion-wash-${motion.url}`}
+                source={motionVideo}
+                size={48}
+                className="wash-mask pointer-events-none absolute -inset-[100%] -z-1 h-[300%] w-[300%] object-cover opacity-0 blur-[90px] saturate-[1.6] transition-opacity duration-500 ease-in data-live:opacity-50"
               />
             )}
             {/* Shrinks a touch while paused, as Apple's does. Beside a column, a music video plays here at 16:9. */}
@@ -359,6 +387,23 @@ export function FullScreenPlayer() {
                     decoding="async"
                     onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
                   />
+                  {/* The animated sleeve's own ambience, over the still's
+                      pair and under the cover: a mirror of the clip's
+                      frames (MotionAmbience), blurred exactly where the
+                      still's colour layer sits — so when the motion art
+                      fades in, the rim's melt and the wash both carry the
+                      CLIP's colours, not the still's. Sits above the pair
+                      it replaces, below the cover whose feather hands off
+                      into it; until the clip plays it stays transparent
+                      and the still's pair shows. */}
+                  {motion && (
+                    <MotionAmbience
+                      key={`ambience-motion-colour-${motion.url}`}
+                      source={motionVideo}
+                      size={32}
+                      className={`${artworkLayer} blur-[32px] saturate-[1.25] contrast-[1.1] data-live:opacity-85`}
+                    />
+                  )}
                   <img
                     key={nowPlaying.artworkUrl}
                     className={`${artworkLayer} melt-mask bg-[#ffffff12] shadow-[0_4px_10px_#0000001a] data-loaded:opacity-100`}
@@ -370,11 +415,14 @@ export function FullScreenPlayer() {
                   />
                 </>
               )}
-              {/* Apple's motion artwork, over the cover once it's playing. */}
+              {/* Apple's motion artwork, over the cover once it's playing.
+                  Its video element is handed to motionVideo, which the two
+                  MotionAmbience mirrors above sample. */}
               {motion && (
                 <MotionArtwork
                   key={motion.url}
                   motion={motion}
+                  videoRef={motionVideo}
                   className="melt-mask absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-600 ease-in data-ready:opacity-100"
                   playing={playing}
                 />

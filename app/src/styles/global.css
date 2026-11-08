@@ -301,11 +301,13 @@
 
 /*
  * And the wash's own cross (FullScreenPlayer's outermost ambience layer):
- * its box ends half a cover-length out, and an unmasked blur would end
- * with it — the cross fades the outer fifth of the box on every side so
- * the far field dies into the backdrop's own artwork colours instead of
- * drawing a rim out there. The cover spans the box's central 53%, so the
- * 20% stops keep the wash full right up to the sleeve's edge.
+ * its box ends a full cover-length out (double the r4 reach, -inset-[100%]),
+ * and an unmasked blur would end with it — the cross fades the outer fifth
+ * of the box on every side so the far field dies into the backdrop's own
+ * artwork colours instead of drawing a rim out there. The cover spans the
+ * box's central third, so the 20% stops keep the wash full from two-fifths
+ * of a cover-length before each of its edges to two-fifths past them, and
+ * the falloff spends its remaining reach ending as softly as it began.
  */
 @utility wash-mask {
   mask-image:

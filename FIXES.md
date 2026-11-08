@@ -1762,3 +1762,81 @@ Files changed this round: `app/src/shell/FullScreenPlayer.tsx`,
 `app/src/styles/global.css`. Frontend build (`tsc -p . && vite build`)
 passes; the compiled stylesheet carries both mask utilities with the
 minifier's `-webkit-mask-composite` fallbacks for the older engines.
+
+## Round 5 — the ambience twice the size, and it follows the animated cover
+
+Two reports after r4: the glow still "fades away really close to the cover —
+make it 2x the size", and when Apple's animated sleeve plays, the ambience
+still melts the *still* artwork — it should melt the animated one, "without
+sacrificing system resources". Both are in, plus the bug that quietly caused
+the first report all along.
+
+### 1. The wash never actually reached out — a replaced-element sizing bug (FullScreenPlayer.tsx)
+
+The r4 wash was `absolute -inset-[45%]` and nothing else. For a plain div
+that is a box 190% of the sleeve, centred on it. For an `<img>` — a
+**replaced element** — it is not: CSS 2.1 §10.3.8 gives an absolutely
+positioned replaced element its *intrinsic* size when width and height are
+auto, and the over-constrained pair of offsets simply loses `right`/`bottom`.
+So the wash (a 120px artwork thumb) never stretched to its -inset box; it sat
+at the thumb's own 120px, offset up-left of the sleeve's corner, where blur
+and mask smeared it into a small blob. Everything the eye read as "glow" was
+the near pair's blur(32px) bleeding ~32px past the sleeve — a short falloff
+hugging the cover, which is precisely the report. Both prior complaints (the
+r4 "line of separation" and now "fades away really close") were this bug
+wearing two hats.
+
+The wash layers now carry explicit `h-[300%] w-[300%]` alongside
+`-inset-[100%]` — values chosen to agree, so the box is exactly three
+sleeves on a side, centred (verified in a live page: the wash rect measures
+1380px around a 460px sleeve). The same sizing is on the animated wash
+canvas, whose intrinsic size would otherwise be its 48px bitmap.
+
+### 2. Twice the reach (FullScreenPlayer.tsx, global.css)
+
+With the box fixed, the reach doubles: the wash now extends a **full
+cover-length out on every side** (`-inset-[100%]`, was 45% — the visible
+light reaches about twice as far before it ends). `wash-mask`'s 20%/80%
+stops still end the box softly: the cover spans the box's central third, so
+the wash stays full from two-fifths of a cover-length before each edge to
+two-fifths past it, then spends its remaining reach dying into the backdrop's
+own artwork colours. blur(90px) saturate(1.6) at 0.50 unchanged.
+
+### 3. The animated sleeve melts with its own motion (new `app/src/components/music/MotionAmbience.tsx`, `MotionArtwork.tsx`, FullScreenPlayer.tsx)
+
+The ambience sources were static `<img>`s of the artwork, so an animated
+sleeve glowed with its poster. Now the glow mirrors the clip:
+
+- `MotionArtwork` takes an optional `videoRef` and hands out the `<video>`
+  it is already playing (additive; the album header's use is untouched).
+- `MotionAmbience` is a tiny canvas that samples that same element —
+  `drawImage` of the frame's centre square (the object-cover crop the sleeve
+  shows) into a 32px/48px bitmap, every animation frame while the clip
+  plays. **Nothing is decoded, buffered or downloaded twice**: one video
+  element, one stream, a few sub-millisecond small-texture copies a frame;
+  paused, it copies nothing at all (the canvas holds its last frame exactly
+  as the video holds its own). Through hls.js the clip arrives as MediaSource
+  buffers — a same-origin blob — so the canvas stays clean; even a
+  cross-origin fallback would only taint it, which display never notices.
+- Two mirrors sit where the still's copies sit: one in the wash slot
+  (`-inset-[100%]`, blur 90 saturate 1.6 @ 0.50, wash-masked — it covers the
+  static wash completely, so the far field switches from the still's colours
+  to the motion's as the video fades in) and one inside the sleeve over the
+  colour/punch pair, under the cover (blur 32 saturate 1.25 contrast 1.1 @
+  0.85), so the feathered rim hands off into the *clip's* colours, not the
+  still's. Each mirror fades in on its first frame (`data-live`); until the
+  clip actually plays, or if it never does, the static copies show exactly
+  as before.
+
+Mocked standalone at the app's own scale (`scripts/ambience_preview.py`,
+rendered to `ambience-reach-compare.png`): r4's glow dies inside the 2x edge
+crop, r5's carries on out with no line anywhere, and the animated variant —
+mocked by hue-rotating the clip over the same still — shows the glow
+carrying the clip's own colours across the rim.
+
+Files changed this round: `app/src/shell/FullScreenPlayer.tsx`,
+`app/src/components/music/MotionArtwork.tsx`,
+`app/src/components/music/MotionAmbience.tsx` (new),
+`app/src/styles/global.css` (comment only). Frontend build
+(`tsc -p . && vite build`) passes; the compiled stylesheet carries
+`inset: -100%` with the 300% sizes and both `data-live` opacity variants.
