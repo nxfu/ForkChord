@@ -1712,3 +1712,53 @@ against a dark backdrop): the shipped middle values melt without going neon.
 Files changed this round: `src-tauri/src/{media,lib,island,agent}.rs`,
 `app/src/styles/global.css`, `app/src/shell/FullScreenPlayer.tsx`. Frontend
 build (`tsc -p . && vite build`) passes; all four Rust files parse clean.
+
+## Round 4 — the ambience with no line of separation
+
+The r3 ambience was the right direction but not the right distance: the
+report back was that a visible line still separated the cover from the
+background. Three things drew that line, and all three are gone now.
+
+1. **The sleeve had a geometric edge.** A sharp cover ending against a
+   darker surround is a step function, however soft the glow behind it —
+   the eye reads the brightness cliff as a border. The cover (and Apple's
+   motion artwork over it) now carries `melt-mask` (`global.css`): its rim
+   fades to transparent over `clamp(10px, 4.5%, 26px)` — two linear
+   gradients, one per axis, intersected into a cross, because a radial
+   vignette would eat a square's corners. There is no edge left for a
+   line to live on; the artwork dissolves into its own light.
+2. **The glow fell too short.** Two blur(40px) copies confined to the
+   cover's box die within ~80px of the sleeve — a short, steep fall onto
+   the scrimmed backdrop reads as a ring. A third layer, the **wash**, now
+   reaches half a cover-length out (`-inset-[45%]`, blur 90px, saturate
+   1.6, at 0.50): the falloff has somewhere to go, and it ends in the
+   backdrop's own artwork colours instead of darkness. The wash carries
+   `wash-mask`, the same cross at 20%/80% stops, so its own box ends as
+   softly as it began (the sleeve spans its centre half, so the stops keep
+   it full up to the artwork's edge).
+3. **The near layers tinted the rim.** saturate(1.5)/contrast(1.5) shift
+   the bleed's colours away from the cover's own edge pixels — a hue step
+   at the boundary. The near pair is now blur(32px) saturate(1.25) at 0.80
+   (colour-true continuation) and blur(32px) contrast(1.4) at 0.30 (punch,
+   kept low so it cannot tint the rim).
+
+Layering, which is where this round got subtle: the wash is a **sibling of
+the sleeve, not a child** — `-z-1` inside the root's `isolate`, so it
+paints over the backdrop but under the section's static text (the glow
+washes behind the title and the lyrics, never over them). It cannot live
+inside the sleeve's box: the pause shrink (`scale-92`) turns that box into
+a stacking context whenever music is paused, which would lift the glow
+above the very text it fades behind while playing. The near pair stays at
+the cover's own box (in DOM order under the sleeve, above the wash), and
+`pointer-events-none` on the wash keeps the glow from eating clicks aimed
+at the empty space it crosses.
+
+Mocked standalone at the app's own scale (460px sleeve, the app's scrimmed
+full-cover blur as the backdrop — `scripts/ambience_preview.py`): r3's
+edge crop shows the hard step, the shipped values dissolve into the
+backdrop with no line at 2x zoom.
+
+Files changed this round: `app/src/shell/FullScreenPlayer.tsx`,
+`app/src/styles/global.css`. Frontend build (`tsc -p . && vite build`)
+passes; the compiled stylesheet carries both mask utilities with the
+minifier's `-webkit-mask-composite` fallbacks for the older engines.

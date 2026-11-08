@@ -281,6 +281,40 @@
 }
 
 /*
+ * The melted sleeve (FullScreenPlayer): the cover's rim fades out over a
+ * few percent so the artwork has no geometric edge for the ambience to
+ * stop at — the glow is the edge. Two linear gradients, one per axis,
+ * intersected into a cross: a radial vignette would eat a square's
+ * corners, where these fade each straight edge by its own width whatever
+ * the artwork's side (--melt-feather, 4.5% of it between 10px and 26px).
+ * Standard mask properties only: every engine the app ships on (WebView2,
+ * WKWebView, WebKitGTK 2.40+) has them, and an engine without the pair
+ * loses only the feather, not the melt.
+ */
+@utility melt-mask {
+  --melt-feather: clamp(10px, 4.5%, 26px);
+  mask-image:
+    linear-gradient(to right, transparent, #000 var(--melt-feather), #000 calc(100% - var(--melt-feather)), transparent),
+    linear-gradient(to bottom, transparent, #000 var(--melt-feather), #000 calc(100% - var(--melt-feather)), transparent);
+  mask-composite: intersect;
+}
+
+/*
+ * And the wash's own cross (FullScreenPlayer's outermost ambience layer):
+ * its box ends half a cover-length out, and an unmasked blur would end
+ * with it — the cross fades the outer fifth of the box on every side so
+ * the far field dies into the backdrop's own artwork colours instead of
+ * drawing a rim out there. The cover spans the box's central 53%, so the
+ * 20% stops keep the wash full right up to the sleeve's edge.
+ */
+@utility wash-mask {
+  mask-image:
+    linear-gradient(to right, transparent, #000 20%, #000 80%, transparent),
+    linear-gradient(to bottom, transparent, #000 20%, #000 80%, transparent);
+  mask-composite: intersect;
+}
+
+/*
  * Grouped settings rows: a hairline between two rows of the same kind, inset
  * from the left by the value (to the text, past an icon).
  */

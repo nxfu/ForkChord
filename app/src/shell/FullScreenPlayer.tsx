@@ -300,63 +300,87 @@ export function FullScreenPlayer() {
           }
           aria-label="Player"
         >
-          {/* Shrinks a touch while paused, as Apple's does. Beside a column, a music video plays here at 16:9. */}
-          <div
-            className={`relative w-(--art) rounded-[10px] transition-[scale] duration-450 ease-[cubic-bezier(0.34,1.3,0.64,1)] motion-reduce:transition-none${
-              video ? ' aspect-video overflow-hidden bg-black' : ' aspect-square'
-            }${playing ? '' : ' scale-92'}${column ? ' max-md:hidden' : ''}${theater ? ' hidden' : ''}`}
-          >
+          {/* The ambience's outermost layer lives out here, a sibling of the
+              sleeve rather than a child of it: at -z-1 it joins the root's
+              negative-z phase, over the backdrop but under this section's
+              own text — the glow washes behind the title and the lyrics
+              instead of veiling them. It must also stay out of the sleeve's
+              box, whose pause shrink (scale-92) would otherwise trap it in
+              a stacking context that lifts the whole box over that text
+              whenever the music is paused. */}
+          <div className={`relative w-(--art)${column ? ' max-md:hidden' : ''}${theater ? ' hidden' : ''}`}>
             {nowPlaying.artworkUrl && (
-              <>
-                {/* The cover's ambience — Spicetify's NPV Ambience, melted.
-                    The artwork twice more at the cover's own box, blurred
-                    wide: one saturated for the colour, one contrasted for
-                    the punch, the mod's ::before/::after pair. No scale, no
-                    offset, no mask: the blur's own falloff is the melt. At
-                    the cover's edge the blurred copy is still the cover's
-                    own pixels, so the light leaves the sleeve with no seam —
-                    and it has died before it could read as a shape of its
-                    own, which is where the reference app's glow stopped
-                    short. */}
-                <img
-                  key={`ambience-colour-${nowPlaying.artworkUrl}`}
-                  className={`${artworkLayer} -z-1 blur-[40px] saturate-150 data-loaded:opacity-70`}
-                  src={sizedArtwork(nowPlaying.artworkUrl, 120)}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  decoding="async"
-                  onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
-                />
-                <img
-                  key={`ambience-punch-${nowPlaying.artworkUrl}`}
-                  className={`${artworkLayer} -z-1 blur-[40px] contrast-150 data-loaded:opacity-45`}
-                  src={sizedArtwork(nowPlaying.artworkUrl, 120)}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  decoding="async"
-                  onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
-                />
-                <img
-                  key={nowPlaying.artworkUrl}
-                  className={`${artworkLayer} bg-[#ffffff12] shadow-[0_4px_10px_#0000001a] data-loaded:opacity-100`}
-                  src={sizedArtwork(nowPlaying.artworkUrl, 600)}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  decoding="async"
-                  onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
-                />
-              </>
-            )}
-            {/* Apple's motion artwork, over the cover once it's playing. */}
-            {motion && (
-              <MotionArtwork
-                key={motion.url}
-                motion={motion}
-                className="absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-600 ease-in data-ready:opacity-100"
-                playing={playing}
+              <img
+                key={`ambience-wash-${nowPlaying.artworkUrl}`}
+                className="wash-mask pointer-events-none absolute -inset-[45%] -z-1 object-cover opacity-0 blur-[90px] saturate-[1.6] transition-opacity duration-500 ease-in data-loaded:opacity-50"
+                src={sizedArtwork(nowPlaying.artworkUrl, 120)}
+                alt=""
+                referrerPolicy="no-referrer"
+                decoding="async"
+                onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
               />
             )}
-            {video && !theater && <VideoSurface className="absolute inset-0" />}
+            {/* Shrinks a touch while paused, as Apple's does. Beside a column, a music video plays here at 16:9. */}
+            <div
+              className={`relative w-(--art) rounded-[10px] transition-[scale] duration-450 ease-[cubic-bezier(0.34,1.3,0.64,1)] motion-reduce:transition-none${
+                video ? ' aspect-video overflow-hidden bg-black' : ' aspect-square'
+              }${playing ? '' : ' scale-92'}`}
+            >
+              {nowPlaying.artworkUrl && (
+                <>
+                  {/* The cover's ambience — Spicetify's NPV Ambience, melted
+                      to no seam at all. The artwork twice at the cover's own
+                      box, where their pixels are the sleeve's own:
+                      blur(32px) saturate(1.25) carries the colour across the
+                      edge true to the artwork, blur(32px) contrast(1.4) at
+                      low opacity adds the punch without tinting the rim.
+                      Behind them the wash (out in the parent) reaches half a
+                      cover-length out so the glow's falloff has somewhere to
+                      go — a short fall onto the dark backdrop is what read
+                      as a line before. The sleeve itself is feathered
+                      (melt-mask): its rim fades over a few percent into the
+                      glow, so no geometric edge is left for a separation to
+                      live on. */}
+                  <img
+                    key={`ambience-colour-${nowPlaying.artworkUrl}`}
+                    className={`${artworkLayer} blur-[32px] saturate-[1.25] data-loaded:opacity-80`}
+                    src={sizedArtwork(nowPlaying.artworkUrl, 120)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
+                  />
+                  <img
+                    key={`ambience-punch-${nowPlaying.artworkUrl}`}
+                    className={`${artworkLayer} blur-[32px] contrast-[1.4] data-loaded:opacity-30`}
+                    src={sizedArtwork(nowPlaying.artworkUrl, 120)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
+                  />
+                  <img
+                    key={nowPlaying.artworkUrl}
+                    className={`${artworkLayer} melt-mask bg-[#ffffff12] shadow-[0_4px_10px_#0000001a] data-loaded:opacity-100`}
+                    src={sizedArtwork(nowPlaying.artworkUrl, 600)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
+                  />
+                </>
+              )}
+              {/* Apple's motion artwork, over the cover once it's playing. */}
+              {motion && (
+                <MotionArtwork
+                  key={motion.url}
+                  motion={motion}
+                  className="melt-mask absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-600 ease-in data-ready:opacity-100"
+                  playing={playing}
+                />
+              )}
+              {video && !theater && <VideoSurface className="absolute inset-0" />}
+            </div>
           </div>
 
           <div className={`flex items-center gap-3${theater ? '' : ' mt-[clamp(20px,3.2vh,32px)]'}${column ? ' max-md:mt-0' : ''}`}>
