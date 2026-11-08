@@ -1643,3 +1643,72 @@ Files changed vs r1: exactly `src-tauri/src/chrome.rs`,
 `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs` (recursive diff). The
 `objc2-app-kit` dependency was already correct in r1's `Cargo.toml` — the
 macOS CI log reaching borrow-check proves the crate resolved.
+
+---
+
+## Round 3 — Windows' second player, the scrollbars, the cover's ambience
+
+### 1. Windows: the two-players bug, same as macOS had (src-tauri)
+WebView2 runs its own media player exactly like WKWebView does on macOS: a
+playing element walks into SMTC through Chromium's media session service, and
+souvlaki's own registration stood beside it — two cards in the volume flyout
+for one song. The macOS cure (souvlaki stands down) does not translate — on
+Windows souvlaki IS the feature — so this is the reverse: the webview's
+player is stood down at birth.
+
+Every WebView2 in the app (main, island, agent — one shared browser process
+needs one shared environment) is now built with:
+
+```
+--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,MediaSessionService,HardwareMediaKeyHandling --autoplay-policy=no-user-gesture-required
+```
+
+The first three flags and the autoplay policy ARE wry 0.57.1's own Windows
+defaults, which an `additional_browser_args` override replaces wholesale —
+repeated so the override loses nothing (confirmed against wry's
+`webview2/mod.rs` at v0.57.1). `MediaSessionService` is the browser-side
+service that registers a playing element with the OS's system media controls
+(the same feature other Chromium-embedded players disable for exactly this —
+cf. TidaLuna's `--disable-features=MediaSessionService,HardwareMediaKeyHandling`);
+`HardwareMediaKeyHandling` takes the engine's own media-key handling out so
+it cannot race the keys the SMTC registration already delivers to souvlaki.
+The constant lives in `media.rs::WEBVIEW_BROWSER_ARGS` with the full story in
+its doc comment; `lib.rs`, `island.rs` and `agent.rs` apply it (cfg'd to
+Windows).
+
+### 2. The scrollbars, again (app/src/styles/global.css)
+The r1 port scoped the AppleScrollbar styles to `#scrollable-page` and its
+descendants — and then set `scrollbar-width: thin` on those very elements.
+From Chromium 121 on (every current WebView2), a set `scrollbar-width`
+switches the element to the NATIVE bar and disables `::-webkit-scrollbar`
+styles for it outright — the file's own comment said so, and then did it
+anyway. Result: the main page scroller (and `html`) drew WebView2's classic
+bar, arrows and all, exactly what the screenshots showed.
+
+The rules are now bare pseudo-element selectors — every scroller in every
+document state gets the 7px rounded translucent bar (track invisible, no
+buttons, 26px minimum thumb, hover to the lit colour) — and there is no
+`scrollbar-width` anywhere a bar should stay visible. Components that hide
+their bars on purpose (sidebar, shelves) keep their own `scrollbar-width:
+none` utilities, which outrank the base layer.
+
+### 3. The fullscreen cover's ambience, melted (app/src/shell/FullScreenPlayer.tsx)
+The radiosity glow behind the cover (one 60px copy, blur 20px, scale 96%,
+translate-y-2) was an under-cover darkening, not an ambience. Replaced with
+Spicetify's NPV Ambience pair, adapted:
+
+- the artwork twice more at the cover's own box (120px sources), both
+  `blur(40px)`: one `saturate(1.5)` at 0.70 for the colour, one
+  `contrast(1.5)` at 0.45 for the punch — the mod's ::before/::after pair;
+- deliberately no scale, no offset and no mask. The blur's own Gaussian
+  falloff is the melt: at the cover's edge the blurred copy is still the
+  cover's own pixels, so the light leaves the sleeve with no seam, and it
+  has died before it could read as a shape — where the reference app's glow
+  showed a clear boundary between cover and background.
+
+Mocked standalone at three strengths (scripts/ambience_preview.py, rendered
+against a dark backdrop): the shipped middle values melt without going neon.
+
+Files changed this round: `src-tauri/src/{media,lib,island,agent}.rs`,
+`app/src/styles/global.css`, `app/src/shell/FullScreenPlayer.tsx`. Frontend
+build (`tsc -p . && vite build`) passes; all four Rust files parse clean.

@@ -2,11 +2,17 @@
 //! through the shim; this module mirrors that state into the platform's
 //! player: MPRIS on Linux (souvlaki) and SMTC on Windows (souvlaki with the
 //! main window's HWND — the thing that puts BitChord on the volume flyout,
-//! the lock screen and the hardware media keys at system level; WebView2's
-//! own media session never surfaces there, which is why the controls used to
-//! be Linux-only and Windows had nothing at all). macOS deliberately does
-//! not register here — see [attach]. The tray reads the snapshot on every
-//! platform for its Play/Pause label.
+//! the lock screen and the hardware media keys at system level). macOS
+//! deliberately does not register here — see [attach]. The tray reads the
+//! snapshot on every platform for its Play/Pause label.
+//!
+//! On both macOS and Windows the web engine also runs its own player: a
+//! playing element walks straight into the system's media surface (Now
+//! Playing via WKWebView, SMTC via WebView2's media session service), and a
+//! registration of our own would stand beside it as a second player. macOS
+//! answers by staying out of the way; Windows answers by standing the
+//! webview's player down — [WEBVIEW_BROWSER_ARGS], which every WebView2 in
+//! the app is built with.
 
 use tauri::{AppHandle, Manager};
 
@@ -18,6 +24,23 @@ use tauri::{AppHandle, Manager};
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig};
 
 use crate::commands::{platform_name, AppState, MediaUpdate};
+
+/// The WebView2 browser arguments every webview in the app is built with on
+/// Windows.
+///
+/// The first three flags are wry's own Windows defaults, which an
+/// `additional_browser_args` override replaces wholesale — they are repeated
+/// here so the override loses nothing. The autoplay policy is wry's other
+/// default, likewise repeated. The last two are the addition, and they are
+/// the web engine's media player standing down: `MediaSessionService` is
+/// Chromium's browser-side service that registers a playing element with the
+/// OS's system media controls — left on, WebView2 puts its own card beside
+/// souvlaki's in the volume flyout, the same two-players bug WKWebView
+/// causes on macOS — and `HardwareMediaKeyHandling` is the browser's own
+/// media-key handling, which would race the keys the SMTC registration
+/// already delivers to souvlaki.
+#[cfg(target_os = "windows")]
+pub const WEBVIEW_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,MediaSessionService,HardwareMediaKeyHandling --autoplay-policy=no-user-gesture-required";
 
 #[derive(Debug, Clone, Default)]
 pub struct MediaSnapshot {
@@ -57,6 +80,17 @@ thread_local! {
 /// two players for one song: a bare "BitChord" card and the webview's own.
 /// With souvlaki out of the way the webview's card is the only one, and the
 /// hardware keys come through WebKit's own handling of the same element.
+///
+/// Windows is the same disease with the opposite cure: WebView2's media
+/// session service registers the playing element with SMTC on its own, and
+/// a system that once showed *nothing* at all now showed the webview's
+/// player AND souvlaki's — two cards, one song. Here souvlaki stays (it is
+/// the only thing keeping Windows on the flyout, the lock screen and the
+/// hardware keys, and the one that knows the app's own artwork and
+/// timeline), and the webview's player is stood down at birth instead:
+/// every WebView2 in the app is built with [WEBVIEW_BROWSER_ARGS], whose
+/// `MediaSessionService` and `HardwareMediaKeyHandling` flags take the
+/// engine's own registration and its own key handling out of the picture.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn attach(app: &AppHandle) {
     #[cfg(target_os = "windows")]

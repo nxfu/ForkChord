@@ -308,11 +308,29 @@ export function FullScreenPlayer() {
           >
             {nowPlaying.artworkUrl && (
               <>
+                {/* The cover's ambience — Spicetify's NPV Ambience, melted.
+                    The artwork twice more at the cover's own box, blurred
+                    wide: one saturated for the colour, one contrasted for
+                    the punch, the mod's ::before/::after pair. No scale, no
+                    offset, no mask: the blur's own falloff is the melt. At
+                    the cover's edge the blurred copy is still the cover's
+                    own pixels, so the light leaves the sleeve with no seam —
+                    and it has died before it could read as a shape of its
+                    own, which is where the reference app's glow stopped
+                    short. */}
                 <img
-                  key={`glow-${nowPlaying.artworkUrl}`}
-                  // The radiosity glow: a small copy, blurred and saturated, behind the artwork.
-                  className={`${artworkLayer} -z-1 translate-y-2 scale-96 blur-[20px] saturate-200 data-loaded:opacity-40`}
-                  src={sizedArtwork(nowPlaying.artworkUrl, 60)}
+                  key={`ambience-colour-${nowPlaying.artworkUrl}`}
+                  className={`${artworkLayer} -z-1 blur-[40px] saturate-150 data-loaded:opacity-70`}
+                  src={sizedArtwork(nowPlaying.artworkUrl, 120)}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  decoding="async"
+                  onLoad={(e) => e.currentTarget.setAttribute('data-loaded', '')}
+                />
+                <img
+                  key={`ambience-punch-${nowPlaying.artworkUrl}`}
+                  className={`${artworkLayer} -z-1 blur-[40px] contrast-150 data-loaded:opacity-45`}
+                  src={sizedArtwork(nowPlaying.artworkUrl, 120)}
                   alt=""
                   referrerPolicy="no-referrer"
                   decoding="async"

@@ -105,6 +105,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .minimizable(false)
         .visible(false)
         .initialization_script(ISLAND_SHIM);
+    // Same WebView2 argument set as the main window (media.rs): the engine's
+    // own media player stands down, and one browser process serves every
+    // webview in the app instead of one per differing environment.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.additional_browser_args(crate::media::WEBVIEW_BROWSER_ARGS);
+    }
     // The first click lands on the pill instead of only activating the
     // window — the island is a glanceable control, not something to focus.
     #[cfg(target_os = "macos")]

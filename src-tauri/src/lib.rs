@@ -113,6 +113,18 @@ pub fn run() {
             if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
                 builder = builder.icon(icon).expect("the window icon is valid");
             }
+            // The one argument set every WebView2 here is built with: wry's
+            // defaults plus the two flags that stand the engine's own media
+            // player down (media.rs — without them the volume flyout shows
+            // the webview's card beside souvlaki's, two players, one song).
+            // The island and the agent windows repeat it verbatim: WebView2
+            // only shares one browser process between webviews whose
+            // environments agree, and a second process for a differing arg
+            // set is memory spent on nothing.
+            #[cfg(target_os = "windows")]
+            {
+                builder = builder.additional_browser_args(crate::media::WEBVIEW_BROWSER_ARGS);
+            }
             #[cfg(target_os = "macos")]
             {
                 // Traffic lights over the glass sidebar, Apple Music style.
@@ -165,11 +177,12 @@ pub fn run() {
             // The desktop player reports state through the shim; mirror it
             // into the platform players the webview can't own: MPRIS on
             // Linux, SMTC on Windows (the volume flyout, the lock screen and
-            // the hardware keys — WebView2's own media session never
-            // surfaces at system level). macOS registers nothing: WKWebView
-            // puts the playing element on Now Playing by itself, and a
-            // registration of our own used to stand beside it as a second
-            // player (media.rs::attach).
+            // the hardware keys — souvlaki's registration is the only one on
+            // Windows, the webview's own having been stood down at birth by
+            // the browser args above; see media.rs). macOS registers
+            // nothing: WKWebView puts the playing element on Now Playing by
+            // itself, and a registration of our own used to stand beside it
+            // as a second player (media.rs::attach).
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             media::attach(app.handle());
 

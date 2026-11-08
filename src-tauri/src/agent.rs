@@ -426,13 +426,23 @@ pub fn open_signin(app: &AppHandle, kind: AgentKind, url: Option<String>) {
         let _ = existing.close();
     }
 
-    let _ = WebviewWindowBuilder::new(app, "agent", WebviewUrl::External(parsed))
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, "agent", WebviewUrl::External(parsed))
         .title(kind.title())
         .inner_size(460.0, 680.0)
         .min_inner_size(360.0, 480.0)
         .user_agent(&chrome_user_agent())
         .initialization_script(agent_script())
-        .initialization_script(CHROME_SPOOF)
+        .initialization_script(CHROME_SPOOF);
+    // Same WebView2 argument set as the main window (media.rs): the sign-in
+    // pages play no audio of their own, but WebView2 only shares one browser
+    // process between webviews whose environments agree, and a second
+    // process for a differing arg set is memory spent on nothing.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.additional_browser_args(crate::media::WEBVIEW_BROWSER_ARGS);
+    }
+    let _ = builder
         // The shim must exist in every document the flow lands on; some
         // engines only honor initialization scripts for the first navigation,
         // so re-eval both on every load (they are idempotent).
