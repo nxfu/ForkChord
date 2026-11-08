@@ -10,7 +10,7 @@ use tauri_plugin_opener::OpenerExt as _;
 
 use bitchord_core::types::{BridgeRequest, HttpRequest, HttpResponse};
 
-use crate::{agent, island, media};
+use crate::{agent, chrome, island, media};
 
 pub struct AppState {
     pub core: Arc<bitchord_core::Core>,

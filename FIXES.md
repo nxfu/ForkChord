@@ -1614,3 +1614,32 @@ screen), with a two-layer system; it is ported here file for file:
   `rust-version = "1.90"`, and no code this round adds uses anything newer
   than what the tree already shipped (let-else, cfg attrs on let, inline
   format args).
+
+---
+
+## CI build fix (r2) — the traffic-light round as first packaged did not compile
+
+Three GitHub Actions failures (Build linux / windows / macos), all from the
+r1 tree:
+
+1. `E0433` `cannot find module or crate 'chrome'` (commands.rs:267, all
+   platforms) — the command was added and the module declared in `lib.rs`
+   (`mod chrome;`), but `commands.rs` never imported it. Fixed:
+   `use crate::{agent, chrome, island, media};`
+2. `E0505` `cannot move out of 'app' because it is borrowed` (chrome.rs:27,
+   macOS only — the non-macOS body is a no-op, so only that build got far
+   enough) — `run_on_main_thread` borrows its receiver while the closure
+   needs the handle by value. Fixed by hopping on a second clone:
+   `app.clone().run_on_main_thread(move || { … app.get_webview_window("main") … })`.
+   Compile-verified in `scripts/chrome_fix_check/` against stub signatures
+   (rustc 1.99.1, `-D warnings`).
+3. Warnings silenced while there: `Manager` in chrome.rs is now
+   `#[cfg(target_os = "macos")]` (only the macOS body uses it), and the
+   `main` binding in lib.rs carries
+   `#[cfg_attr(target_os = "macos", allow(unused_variables))]` (only the
+   non-macOS `set_decorations` call reads it).
+
+Files changed vs r1: exactly `src-tauri/src/chrome.rs`,
+`src-tauri/src/commands.rs`, `src-tauri/src/lib.rs` (recursive diff). The
+`objc2-app-kit` dependency was already correct in r1's `Cargo.toml` — the
+macOS CI log reaching borrow-check proves the crate resolved.

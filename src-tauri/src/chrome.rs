@@ -17,14 +17,21 @@
 //! resizeability, and AppKit does not resurrect hidden buttons on the events
 //! that only reset their *positions* (title changes, fullscreen transitions).
 
-use tauri::{AppHandle, Manager};
+// Manager is only exercised inside the macOS body (get_webview_window);
+// on Windows and Linux the no-op below would leave it unused.
+use tauri::AppHandle;
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
 #[cfg(target_os = "macos")]
 pub fn set_traffic_lights_visible(app: &AppHandle, visible: bool) {
     // NSWindow is MainThreadOnly: the whole job runs on the main thread. The
     // command arrives off-thread (every async command does), so it hops.
+    // The hop's receiver is a second clone: `run_on_main_thread` borrows its
+    // receiver while the closure runs, and the closure itself needs the
+    // handle by value to reach the window — one clone cannot be both.
     let app = app.clone();
-    let _ = app.run_on_main_thread(move || {
+    let _ = app.clone().run_on_main_thread(move || {
         let Some(window) = app.get_webview_window("main") else {
             return;
         };

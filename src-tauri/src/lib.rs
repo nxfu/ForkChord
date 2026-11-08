@@ -124,6 +124,10 @@ pub fn run() {
                 // buttons) is gone; the page supplies the bar.
                 builder = builder.decorations(false);
             }
+            // macOS never reads the binding (its decorations call below is
+            // cfg'd out — the Overlay title bar IS the design), so the allow
+            // keeps that build's warning quiet.
+            #[cfg_attr(target_os = "macos", allow(unused_variables))]
             let main = builder.build()?;
             // Belt and braces for the frame above: the plugin's restore hook
             // ran inside build(), so any state file it read has already had
