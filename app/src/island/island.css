@@ -496,6 +496,41 @@ body {
   display: none;
 }
 
+/* ---- The like button ----------------------------------------------------- */
+
+/* The player pill's Favorite star at the top row's end: the outline at rest,
+   the key-colour fill when liked — the same treatment the pill's
+   FavoriteButton gets (aria-pressed:text-key). `[hidden]` needs an explicit
+   display, the .control class would otherwise out-rank the UA rule. */
+.like {
+  flex: none;
+  color: var(--secondary);
+}
+
+.like:hover {
+  color: var(--primary);
+}
+
+.like .icon-star-filled {
+  display: none;
+}
+
+.like.liked {
+  color: var(--key);
+}
+
+.like.liked .icon-star {
+  display: none;
+}
+
+.like.liked .icon-star-filled {
+  display: block;
+}
+
+.like[hidden] {
+  display: none;
+}
+
 /* ---- Reduced motion ------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {

@@ -118,6 +118,7 @@
   var lastRateSent = 1;
   var lastMetaSent = '';
   var lastStateSent = '';
+  var lastLikeSent = '';
 
   if (typeof window.MediaMetadata !== 'function') {
     // WebKitGTK ships no MediaMetadata; the app constructs one on every track.
@@ -182,6 +183,23 @@
       },
       get playbackState() {
         return lastStateSent;
+      },
+      /**
+       * The current track's thumbs state ('LIKE' | 'INDIFFERENT' |
+       * 'DISLIKE'), or 'NONE' while signed out / with no track — a desktop
+       * extension of the session, so the Dynamic Island's like button knows
+       * how to draw itself. The page pushes on every change; the shell puts
+       * it in the same snapshot the tray and MPRIS read.
+       */
+      set likeStatus(state) {
+        var value = state == null ? 'NONE' : String(state);
+        if (value !== lastLikeSent) {
+          lastLikeSent = value;
+          sendMedia({ kind: 'like', state: value });
+        }
+      },
+      get likeStatus() {
+        return lastLikeSent === '' ? null : lastLikeSent;
       },
       setActionHandler: function (action, handler) {
         mediaHandlers[action] = handler;

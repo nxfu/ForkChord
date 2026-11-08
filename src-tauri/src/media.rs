@@ -52,6 +52,11 @@ pub struct MediaSnapshot {
     pub duration_sec: f64,
     pub position_sec: f64,
     pub rate: f64,
+    /// The current track's thumbs state, as YouTube Music's player shows it:
+    /// `Some(true)` liked, `Some(false)` not, `None` unknown or signed out.
+    /// Read by the Dynamic Island's like button; pushed by the page through
+    /// the shim's `likeStatus`.
+    pub liked: Option<bool>,
 }
 
 // The controls live on the main thread (a requirement on macOS; harmless on
@@ -219,6 +224,13 @@ pub fn apply_update(app: &AppHandle, update: MediaUpdate) {
         }
         "playback" => {
             snapshot.playback_state = update.state.clone().unwrap_or_default();
+        }
+        "like" => {
+            snapshot.liked = match update.state.as_deref() {
+                Some("LIKE") => Some(true),
+                Some("INDIFFERENT") | Some("DISLIKE") => Some(false),
+                _ => None,
+            };
         }
         "position" => {
             snapshot.duration_sec = update.duration;

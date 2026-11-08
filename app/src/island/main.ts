@@ -37,6 +37,8 @@ type Snapshot = {
   duration: number;
   position: number;
   rate: number;
+  /** The track's like state; null while signed out or unknown. */
+  liked: boolean | null;
 };
 
 type Host = { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -81,6 +83,7 @@ const fill = document.getElementById('scrub-fill')!;
 const scrub = document.getElementById('scrub')!;
 const rail = fill.parentElement!;
 const playButton = document.getElementById('btn-play')!;
+const likeButton = document.getElementById('btn-like') as HTMLButtonElement;
 const fullArt = document.getElementById('full-art')!;
 const artImages = Array.from(document.querySelectorAll<HTMLImageElement>('.art img'));
 const artFrames = Array.from(document.querySelectorAll<HTMLElement>('.art'));
@@ -389,6 +392,17 @@ function renderPlayback(s: Snapshot): void {
   playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
 }
 
+/** The like button: hidden while signed out or before the first answer,
+ * the key-colour filled star when liked. An older shell's snapshot (or a
+ * plain browser) may not carry the field at all — read as null, hidden. */
+function renderLike(s: Snapshot): void {
+  const liked = s.liked === true;
+  likeButton.hidden = s.liked == null;
+  likeButton.classList.toggle('liked', liked);
+  likeButton.setAttribute('aria-pressed', String(liked));
+  likeButton.setAttribute('aria-label', liked ? 'Unfavorite' : 'Favorite');
+}
+
 /** The one policy for what the island shows, applied on every input — a media
  * sync, a focus change, the boot-time focus answer. Nothing to show wins first
  * (a track-less player is nothing — no title and no artwork), then BitChord's
@@ -420,6 +434,7 @@ window.__IslandSync = (raw: Snapshot) => {
 
   renderMetadata(raw);
   renderPlayback(raw);
+  renderLike(raw);
   reconcile();
 
   lastDraw = -Infinity;
@@ -479,6 +494,19 @@ playButton.addEventListener('click', () => {
   // Explicit play/pause, resolved locally — the same resolution the tray's
   // Play/Pause item makes, so both stay honest against the same snapshot.
   invoke('island_action', { action: snap?.state === 'playing' ? 'pause' : 'play' });
+  scheduleCollapse();
+});
+
+// Like: pressed through the page's own toggle (the same mutation the app's
+// Favorite stars run), with the flip drawn at once — the round trip through
+// the page's mutation and back rides the next sync, which confirms it or
+// draws the truth over the guess.
+likeButton.addEventListener('click', () => {
+  const liked = !likeButton.classList.contains('liked');
+  likeButton.classList.toggle('liked', liked);
+  likeButton.setAttribute('aria-pressed', String(liked));
+  likeButton.setAttribute('aria-label', liked ? 'Unfavorite' : 'Favorite');
+  invoke('island_action', { action: 'togglelike' });
   scheduleCollapse();
 });
 

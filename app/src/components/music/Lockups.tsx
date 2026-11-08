@@ -1,5 +1,6 @@
 import { PrefetchLink } from '@/components/PrefetchLink';
 import { PlayIcon } from '@/components/icons/Transport';
+import { useState } from 'react';
 import type { MusicItem } from '@/data/music/types';
 import { Artwork } from './Artwork';
 import { ExplicitBadge } from './ExplicitBadge';
@@ -57,8 +58,36 @@ function PlayPlatter({ item }: { item: MusicItem }) {
   );
 }
 
+/** The right-click the playable lockups share: the row's ⋯ menu at the
+ * cursor, the same system the track lists' rows and the queue use (AppShell
+ * blocks the stock webview menu everywhere else). Called unconditionally —
+ * hook rules — with the handlers only wired up for playable items. */
+function useContextMenu() {
+  const [contextPoint, setContextPoint] = useState<{ x: number; y: number } | null>(null);
+  return {
+    contextPoint,
+    onContextClose: () => setContextPoint(null),
+    onContextMenu: (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextPoint({ x: event.clientX, y: event.clientY });
+    },
+  };
+}
+
 /** The artwork with its hover scrim, linking to the item or playing it. */
-function LockupArtwork({ item, width, aspect }: { item: MusicItem; width: number; aspect: number }) {
+function LockupArtwork({
+  item,
+  width,
+  aspect,
+  menu,
+}: {
+  item: MusicItem;
+  width: number;
+  aspect: number;
+  /** The lockup's right-click state; the menu opens at the cursor. */
+  menu?: { contextPoint: { x: number; y: number } | null; onContextClose: () => void };
+}) {
   const href = hrefFor(item);
   return (
     <div className="group/art relative rounded-artwork-md">
@@ -77,6 +106,8 @@ function LockupArtwork({ item, width, aspect }: { item: MusicItem; width: number
         <TrackMenu
           track={toTrack(item)}
           className="absolute top-2 right-2 z-3 grid size-7 place-items-center rounded-full bg-thin-material text-white opacity-0 transition-opacity duration-100 ease-in [backdrop-filter:saturate(180%)_blur(60px)] group-hover/art:opacity-100 focus-visible:opacity-100 hover:bg-key-bg data-open:opacity-100"
+          contextPoint={menu?.contextPoint}
+          onContextClose={menu?.onContextClose}
         />
       )}
     </div>
@@ -86,9 +117,10 @@ function LockupArtwork({ item, width, aspect }: { item: MusicItem; width: number
 /** Square lockup (report §2): artwork, hover scrim with play platter, title and subtitle. */
 export function SquareLockup({ item, width = 220 }: { item: MusicItem; width?: number }) {
   const href = hrefFor(item);
+  const menu = useContextMenu();
   return (
-    <div className={lockup}>
-      <LockupArtwork item={item} width={width} aspect={1} />
+    <div className={lockup} onContextMenu={isPlayable(item) ? menu.onContextMenu : undefined}>
+      <LockupArtwork item={item} width={width} aspect={1} menu={menu} />
       <div className={caption}>
         <div className={title}>
           {href ? (
@@ -110,9 +142,10 @@ export function SquareLockup({ item, width = 220 }: { item: MusicItem; width?: n
 
 /** 16:9 video lockup (report §2, type C). */
 export function VideoLockup({ item, width = 300 }: { item: MusicItem; width?: number }) {
+  const menu = useContextMenu();
   return (
-    <div className={lockup}>
-      <LockupArtwork item={item} width={width} aspect={16 / 9} />
+    <div className={lockup} onContextMenu={isPlayable(item) ? menu.onContextMenu : undefined}>
+      <LockupArtwork item={item} width={width} aspect={16 / 9} menu={menu} />
       <div className={caption}>
         <div className={title}>
           <span>{item.title}</span>
@@ -137,9 +170,13 @@ export function CircleLockup({ item, width = 160 }: { item: MusicItem; width?: n
 /** A song row inside a shelf (report §2, track lockup): 40px art, title, byline. */
 export function TrackLockup({ item, onPlay }: { item: MusicItem; onPlay?: () => void }) {
   const play = onPlay ?? (() => playTrack(item));
+  const menu = useContextMenu();
   return (
     // 52px art column (40 + 12 gap), content, menu; 55px tall.
-    <div className="group/track grid h-[55px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-3 py-[7.5px] pr-3.5 pl-0">
+    <div
+      className="group/track grid h-[55px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-3 py-[7.5px] pr-3.5 pl-0"
+      onContextMenu={isPlayable(item) ? menu.onContextMenu : undefined}
+    >
       <button className="group/art relative w-10 rounded-artwork-sm" aria-label={`Play ${item.title}`} onClick={play}>
         <Artwork src={item.thumbnail} displayWidth={40} radius="var(--radius-artwork-small)" />
         <span
@@ -167,6 +204,8 @@ export function TrackLockup({ item, onPlay }: { item: MusicItem; onPlay?: () => 
         <TrackMenu
           track={toTrack(item)}
           className="grid size-7 place-items-center rounded-full text-key opacity-0 transition-opacity duration-100 ease-in group-hover/track:opacity-100 focus-visible:opacity-100 hover:bg-quinary data-open:opacity-100"
+          contextPoint={menu?.contextPoint}
+          onContextClose={menu?.onContextClose}
         />
       )}
     </div>

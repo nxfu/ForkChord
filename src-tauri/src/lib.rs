@@ -136,6 +136,13 @@ pub fn run() {
                 // buttons) is gone; the page supplies the bar.
                 builder = builder.decorations(false);
             }
+            // The shell's own file-drop handler stands down: while it is
+            // armed, WebView2 hands every drag to it and the page's HTML5
+            // drag events (dragstart/dragover/drop) never fire — which left
+            // the Up Next list's drag-to-reorder dead on Windows. Nothing in
+            // the app drops files onto the window, so the handler only ever
+            // cost the queue its rows.
+            builder = builder.disable_drag_drop_handler();
             // macOS never reads the binding (its decorations call below is
             // cfg'd out — the Overlay title bar IS the design), so the allow
             // keeps that build's warning quiet.

@@ -201,12 +201,30 @@ const likeKey = (videoId: string) => ['music', 'like', videoId] as const;
 
 export function useLikeStatus(videoId: string | null) {
   const signedIn = useSignedIn();
-  return useQuery({
+  const status = useQuery({
     queryKey: likeKey(videoId ?? ''),
     queryFn: () => fetchLikeStatus(videoId!),
     enabled: signedIn && !!videoId,
     staleTime: 5 * 60_000,
   });
+  // The Dynamic Island's like button draws from the shell's media snapshot,
+  // so under the desktop shim every state change here is pushed to it — the
+  // same truth the app's own stars read, one push per change (the shim
+  // dedupes). 'NONE' when signed out or between tracks; 'INDIFFERENT' stands
+  // in for "signed in, answer still in flight" so the star never flickers
+  // away on a track change. The web app has no shim and skips.
+  const liked = status.data;
+  useEffect(() => {
+    if (!('__BITCHORD_DESKTOP__' in window)) return;
+    const session = navigator.mediaSession as MediaSession & { likeStatus?: string | null };
+    const next = !signedIn || !videoId ? 'NONE' : (liked ?? 'INDIFFERENT');
+    try {
+      session.likeStatus = next;
+    } catch {
+      /* a browser session without the shim's setter */
+    }
+  }, [signedIn, videoId, liked]);
+  return status;
 }
 
 /** Like or unlike, shown at once and put back if YouTube refuses. */

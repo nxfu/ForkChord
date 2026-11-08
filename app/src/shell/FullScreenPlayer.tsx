@@ -169,6 +169,10 @@ export function FullScreenPlayer() {
   const picked = useRef(false);
   const [idle, setIdle] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
+  // Right-click anywhere on the player's own column (artwork, names, seek
+  // line, transport) opens the track's ⋯ menu at the cursor, stamped with
+  // the track it was opened for so a change can't re-open it stale.
+  const [context, setContext] = useState<{ x: number; y: number; videoId: string } | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const browserFullScreen = useBrowserFullScreen();
   const close = useRef<HTMLButtonElement>(null);
@@ -304,6 +308,12 @@ export function FullScreenPlayer() {
             theater ? 'flex w-[min(720px,100%)] min-w-0 flex-col' : `flex w-(--art) min-w-0 flex-col${column ? ' max-md:order-2 max-md:w-full' : ''}`
           }
           aria-label="Player"
+          onContextMenu={(event) => {
+            if (!nowPlaying) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setContext({ x: event.clientX, y: event.clientY, videoId: nowPlaying.videoId });
+          }}
         >
           {/* The ambience's outermost layer lives out here, a sibling of the
               sleeve rather than a child of it: at -z-1 it joins the root's
@@ -469,6 +479,8 @@ export function FullScreenPlayer() {
                 track={track}
                 className="grid size-8 flex-none place-items-center rounded-full bg-quinary text-primary hover:bg-quaternary"
                 placement="above-end"
+                contextPoint={context && context.videoId === videoId ? context : null}
+                onContextClose={() => setContext(null)}
               />
             )}
           </div>

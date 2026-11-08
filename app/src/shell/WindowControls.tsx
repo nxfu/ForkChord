@@ -87,17 +87,32 @@ export function WindowControls() {
       const target = event.target;
       return !(target instanceof Element && target.closest(INTERACTIVE));
     };
+    // Double-click is detected by hand, not from a dblclick event: the first
+    // mousedown hands the pointer to the OS drag loop (window_start_drag),
+    // and the loop's capture means the webview never sees the pair as a
+    // double click — the toggle only ever ran on the maximize button. Two
+    // bar mousedowns inside the double-click time and a few pixels of each
+    // other toggle maximize instead of dragging; the tracker resets so a
+    // third press drags again rather than toggling back.
+    const DOUBLE_MS = 500;
+    const DOUBLE_PX = 8;
+    let lastAt = -Infinity;
+    let lastX = 0;
+    let lastY = 0;
     const onMouseDown = (event: MouseEvent) => {
-      if (onBar(event)) press('window_start_drag');
-    };
-    const onDoubleClick = (event: MouseEvent) => {
-      if (onBar(event)) press('window_toggle_maximize');
+      if (!onBar(event)) return;
+      const now = performance.now();
+      const again =
+        now - lastAt <= DOUBLE_MS && Math.abs(event.clientX - lastX) <= DOUBLE_PX && Math.abs(event.clientY - lastY) <= DOUBLE_PX;
+      lastAt = again ? -Infinity : now;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      if (again) press('window_toggle_maximize');
+      else press('window_start_drag');
     };
     window.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('dblclick', onDoubleClick);
     return () => {
       window.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('dblclick', onDoubleClick);
     };
   }, [active]);
 

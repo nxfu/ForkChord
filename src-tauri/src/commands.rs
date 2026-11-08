@@ -245,8 +245,11 @@ pub async fn window_hide(app: AppHandle) -> Result<(), String> {
 /// Dragging the transparent top bar. The page presses this from a plain
 /// mousedown on empty top-of-window space — the same gesture the native
 /// frame's caption handled, decided in the page where the content lives.
+/// The island is told, so the move loop's focus blip can't flash it up
+/// (island.rs::notify_drag_started).
 #[tauri::command]
 pub async fn window_start_drag(app: AppHandle) -> Result<(), String> {
+    island::notify_drag_started();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.start_dragging();
     }

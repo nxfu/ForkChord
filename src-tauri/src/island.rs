@@ -21,7 +21,7 @@
 //! always hug the visible pill. The window-state plugin must never track this
 //! window (see the denylist in lib.rs) — its place is computed, not restored.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
@@ -39,17 +39,79 @@ const ISLAND_SHIM: &str = include_str!("../shim/island.js");
 /// launch corrects it with the window's first Focused(true) event.
 static MAIN_FOCUSED: AtomicBool = AtomicBool::new(false);
 
+/// A generation stamp for focus pushes. A focus change that un-focuses the
+/// window bumps it and schedules the island's push a beat later; a Focused
+/// event that lands inside that beat bumps it again, and the pending push
+/// wakes up to find itself stale and stays silent. This is what keeps the
+/// title bar's native drag loop (which blips focus off and back within a
+/// frame or two on Windows) from flashing the card up for a split second.
+static FOCUS_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// How long an unfocused stretch must hold before the island is told. Longer
+/// than any drag-start blip, far shorter than an alt-tab the eye would follow.
+const FOCUS_SETTLE_MS: u64 = 350;
+
+/// How long after a bar grab the island refuses to be shown: a native drag's
+/// focus blip can race the drag command in either order, and while the modal
+/// move loop owns the pointer the window keeps the focus anyway, so an
+/// "unfocused" push inside this window is the blip, never the truth.
+const DRAG_HOLD_MS: u64 = 2_000;
+
+/// Epoch millis, for the drag-hold window.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The drag-hold deadline (epoch millis): no unfocused push is sent while
+/// now is inside it.
+static DRAG_UNTIL: AtomicU64 = AtomicU64::new(0);
+
 /// The main window's focus changed (lib.rs's window-event hook). The flag is
 /// the shell's own answer for the island's boot-time query
 /// (`island_focus_state` — the page asks once, before its first sync), and
 /// every change is pushed into the island page, which re-decides what to show.
 /// Regaining focus also clears a right-click dismissal: the island comes back
 /// only after the user has been back in the app and left it again.
+///
+/// Losing focus is pushed on a short settle delay: the page's own top bar
+/// starts the OS drag loop on mousedown, and on Windows that loop blips the
+/// window's focus off and straight back — an island told at once would flash
+/// up for a split second on every grab of the bar. The push only goes out if
+/// the focus is still off when the beat ends.
 pub fn notify_main_focus(app: &AppHandle, focused: bool) {
     MAIN_FOCUSED.store(focused, Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window("island") {
-        let _ = window.eval(&format!("window.__IslandFocus && window.__IslandFocus({focused})"));
+    let Some(window) = app.get_webview_window("island") else { return };
+    let seq = FOCUS_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    if focused {
+        let _ = window.eval("window.__IslandFocus && window.__IslandFocus(true)");
+        return;
     }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(FOCUS_SETTLE_MS));
+        if FOCUS_SEQ.load(Ordering::SeqCst) != seq {
+            return; // focus came back inside the settle: a blip, not a leave
+        }
+        if now_millis() < DRAG_UNTIL.load(Ordering::SeqCst) {
+            return; // a drag is holding the pointer: the blip, not a leave
+        }
+        if let Some(window) = handle.get_webview_window("island") {
+            let _ = window.eval("window.__IslandFocus && window.__IslandFocus(false)");
+        }
+    });
+}
+
+/// The page's top bar grabbed the window (window_start_drag): a native move
+/// loop is starting, and its focus blip can land before the command does.
+/// Cancel any unfocused push already pending, and bar the window for a
+/// couple of seconds — a genuine leave can't happen inside the loop (it owns
+/// the pointer), so everything unfocused in that stretch is the blip.
+pub fn notify_drag_started() {
+    FOCUS_SEQ.fetch_add(1, Ordering::SeqCst);
+    DRAG_UNTIL.store(now_millis() + DRAG_HOLD_MS, Ordering::SeqCst);
 }
 
 /// What the shell last saw, for the island's one boot-time ask.
@@ -176,6 +238,9 @@ pub fn sync(app: &AppHandle, snapshot: &MediaSnapshot) {
         "duration": snapshot.duration_sec,
         "position": snapshot.position_sec,
         "rate": snapshot.rate,
+        // The like button: Some(true)/Some(false) draw it; null keeps it
+        // hidden (signed out, or nothing playing yet).
+        "liked": snapshot.liked,
     });
     let _ = window.eval(&format!("window.__IslandSync && window.__IslandSync({payload})"));
 }
@@ -393,6 +458,13 @@ pub fn handle_action(app: &AppHandle, action: &str, arg: Option<f64>) {
         }
         "play" | "pause" | "nexttrack" | "previoustrack" => {
             crate::media::eval_in_main(app, &format!("window.__BitChordMediaAction('{action}')"));
+        }
+        // The like button: the page registered its own handler for this
+        // action (the same media-session surface the transport uses), so the
+        // toggle runs through the page's own like mutation and its cache —
+        // the app's Favorite stars flip with the island's press.
+        "togglelike" => {
+            crate::media::eval_in_main(app, "window.__BitChordMediaAction('togglelike')");
         }
         _ => {}
     }

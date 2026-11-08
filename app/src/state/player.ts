@@ -1,5 +1,6 @@
 import type { DetectedExtension } from '@bitchord/shared/bridge';
 import { create } from 'zustand';
+import { setTrackLiked, type LikeStatus } from '@/data/music/api';
 import type { Track } from '@/data/music/types';
 import { extensionQueryKey } from '@/extension/useExtension';
 import { artworkAtPixels } from '@/lib/artwork';
@@ -1081,6 +1082,28 @@ function updateMediaSession(track: NowPlaying | null) {
   handle('seekforward', (details) => player().seek((getAudio()?.currentTime ?? 0) + (details.seekOffset ?? 10)));
   handle('previoustrack', () => player().previous());
   handle('nexttrack', () => player().next());
+  // The Dynamic Island's like button (the desktop shell only — the shim's
+  // session stores any action name; a real browser would refuse the unknown
+  // action, and the desktop check keeps even the attempt out). It toggles
+  // the playing track's like through the same query cache every Favorite
+  // star reads, so the app's own buttons flip with the island's press.
+  if ('__BITCHORD_DESKTOP__' in window) {
+    handle('togglelike' as MediaSessionAction, () => {
+      const videoId = usePlayer.getState().nowPlaying?.videoId;
+      if (!videoId) return;
+      // The key is queries.ts's likeKey, kept literal so the data layer
+      // stays out of the player's import graph.
+      const key = ['music', 'like', videoId] as const;
+      const previous = queryClient.getQueryData<LikeStatus>(key);
+      const liked = previous !== 'LIKE';
+      queryClient.setQueryData<LikeStatus>(key, liked ? 'LIKE' : 'INDIFFERENT');
+      setTrackLiked(videoId, liked).catch(() => {
+        // YouTube refused: put the star back the way it was.
+        if (previous !== undefined) queryClient.setQueryData<LikeStatus>(key, previous);
+        else queryClient.removeQueries({ queryKey: key });
+      });
+    });
+  }
 }
 
 function updatePositionState() {

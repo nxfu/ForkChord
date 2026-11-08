@@ -43,6 +43,12 @@ export function PlayerBar() {
   const repeat = usePlayer((s) => s.repeat);
   const { togglePlay, next, previous, toggleShuffle, cycleRepeat } = usePlayer.getState();
   const [volumeOpen, setVolumeOpen] = useState(false);
+  // Right-click on the LCD (the title and artist run) opens the playing
+  // track's ⋯ menu at the cursor, the way the track lists' rows do. The
+  // point is stamped with the track it was opened for, so a track change
+  // (the menu's host unmounting without a close) never re-opens it stale.
+  const [context, setContext] = useState<{ x: number; y: number; videoId: string } | null>(null);
+  const contextPoint = context && track && context.videoId === track.videoId ? context : null;
 
   return (
     // The side panel overlays the page; the pill re-centres in what's left.
@@ -80,7 +86,15 @@ export function PlayerBar() {
           </button>
         </div>
 
-        <div className="h-full min-w-0 px-4">
+        <div
+          className="h-full min-w-0 px-4"
+          onContextMenu={(event) => {
+            if (!track) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setContext({ x: event.clientX, y: event.clientY, videoId: track.videoId });
+          }}
+        >
           <Lcd />
         </div>
 
@@ -93,7 +107,15 @@ export function PlayerBar() {
           }}
         >
           <FavoriteButton videoId={videoId} className={fading} />
-          {track && <TrackMenu track={track} className={fading} placement="above-end" />}
+          {track && (
+            <TrackMenu
+              track={track}
+              className={fading}
+              placement="above-end"
+              contextPoint={contextPoint}
+              onContextClose={() => setContext(null)}
+            />
+          )}
           {/* Always here: the panel itself says whether this track has lyrics, and from where. */}
           <button className={fading} aria-label="Lyrics" aria-pressed={sidePanel === 'lyrics'} onClick={() => toggleSidePanel('lyrics')}>
             {sidePanel === 'lyrics' ? <LyricsActiveIcon size={18} /> : <LyricsIcon size={18} />}

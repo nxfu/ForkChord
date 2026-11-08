@@ -1840,3 +1840,114 @@ Files changed this round: `app/src/shell/FullScreenPlayer.tsx`,
 `app/src/styles/global.css` (comment only). Frontend build
 (`tsc -p . && vite build`) passes; the compiled stylesheet carries
 `inset: -100%` with the 300% sizes and both `data-live` opacity variants.
+
+## Round 6 — cursor menus everywhere, the queue drags, the title bar behaves, the island likes
+
+Six fixes: the right-click ⋯ menu extended to every song surface, queue
+drag-to-reorder actually working on Windows, title-bar double-click and the
+island's split-second flash, the lyrics gear out from under the close
+button, a like button on the expanded Dynamic Island, and back/forward in
+the sidebar. Verified live in a driven browser (menus open at the cursor on
+the queue, a shelf row, the pill's LCD, its ⋯ button and the full-screen
+player; drag-reorder moves rows; back/forward enable and disable with the
+history; the island draws and flips the star), plus the full gate:
+`tsc` clean across workspaces, 174/174 vitest, `vite build` green.
+
+### 1. Right-click opens the ⋯ menu at the cursor, everywhere (TrackMenu.tsx, Lockups.tsx, PlayerBar.tsx, FullScreenPlayer.tsx)
+
+The track lists and the queue already opened their row's ⋯ menu at the
+right-click's position; nothing else did. The same system now covers every
+song surface:
+
+- `TrackMenu`'s own button opens it at the cursor on right-click (an
+  internal `ownPoint`, kept separate from the host's `contextPoint` so the
+  two paths can't race) — which covers the pill, the full-screen player and
+  the shelf cards at once.
+- Shelf lockups (`SquareLockup`, `VideoLockup`, `TrackLockup`) open their
+  item's menu from a right-click anywhere on the card, artwork or caption;
+  a shared `useContextMenu()` hook per lockup, wired only for playable
+  items. The point is stamped with the track it was opened for, so a track
+  change can never re-open a stale menu.
+- The player pill's LCD (title/artist run) and the full-screen player's
+  whole left column open the playing track's menu at the cursor.
+
+The app's capture-phase blocker still kills the stock webview menu
+everywhere else; nothing is added for albums/playlists/artists, which have
+no ⋯ menu to open.
+
+### 2. The queue drags again (lib.rs)
+
+The Up Next rows always had their HTML5 drag handlers; they just never
+fired. Tauri's own drop handler replaces WebView2's on Windows, and with it
+armed the webview ships every drag to the shell — the docs are explicit
+that HTML5 drag and drop requires the handler off. The main window is now
+built with `disable_drag_drop_handler()`; the app has no file-drop feature,
+so nothing else changes. (Verified with synthetic `dragstart`/`dragover`/
+`drop` sequences against the dev server: rows move, `move(from, to)`
+splices as designed.)
+
+### 3. The title bar: double-click maximizes, and no island flash (WindowControls.tsx, island.rs, commands.rs)
+
+Two bugs, one gesture. The bar's `mousedown` hands the pointer to the OS
+drag loop (`window_start_drag`), so the webview never sees a clean click
+pair and the old `dblclick` listener never fired — double-clicking the bar
+did nothing. The double-click is now detected by hand (two bar mousedowns
+within 500 ms and 8 px toggle maximize instead of dragging; the tracker
+resets so a third press drags).
+
+The same first click also flashed the Dynamic Island for a split second:
+starting the native move loop blips the window's focus off and straight
+back, and the island is told about every focus change. Two guards now:
+an unfocused push waits 350 ms and only sends if the focus is still off
+(Focused(true) inside the settle cancels it via a generation counter), and
+`window_start_drag` both cancels any pending push and bars unfocused pushes
+for two seconds — while the modal loop owns the pointer the window keeps
+the focus, so an "unfocused" push in that stretch is the blip, never the
+truth.
+
+### 4. The lyrics gear is out of the close button (SidePanel.tsx)
+
+The side panel ran to the top edge of the frameless window, so its top row
+— the lyrics provider picker's settings gear, and Up Next's AutoPlay/options
+buttons — sat inside the caption-button strip: on Windows the gear landed
+inside the close button. Where the shell draws caption buttons (desktop,
+non-macOS — macOS's traffic lights hang over the sidebar, and the web app
+has no caption at all), the panel now clears the strip with the same 40 px
+the bar is tall. The full-screen player stands the caption down and hides
+this panel, so nothing else moves.
+
+### 5. The expanded island has a like button (island.html/main.ts/css, desktop.js, media.rs, island.rs, player.ts, queries.ts)
+
+The star from the player pill, top-right of the expanded card where the
+markup pointed. The state rides the existing one-snapshot pipeline: the
+media-session shim gains a `likeStatus` slot the page pushes on every
+change; the shell keeps it on `MediaSnapshot` (`Some(true)/Some(false)/
+None`) and syncs it beside the rest; hidden while signed out or unknown.
+A press evals `__BitChordMediaAction('togglelike')` into the page, where
+`player.ts` (desktop-only, registered beside the other media actions)
+toggles the playing track's like through the same query cache every
+Favorite star reads — so the app's own stars flip with the island's press
+— and flips the star optimistically while the answer comes back around.
+`useLikeStatus` does the pushing (`'NONE'` signed out/between tracks,
+`'INDIFFERENT'` while the answer is in flight, so the star never flickers
+away on a track change). The web app has no shim and skips all of it.
+
+### 6. Back and forward, right of the wordmark (Sidebar.tsx)
+
+The back chevron moves from the logo's left to its right, a gap over, and
+a forward chevron joins it in the same ghost style. Forward's availability
+comes from a `useHistoryDepth()` hook: react-router stamps each entry's
+index into `history.state`, the highest index seen is the ceiling, POP may
+move anywhere inside it and PUSH/REPLACE cut it off at the new entry — the
+same rule the entries themselves follow.
+
+Files changed this round: `src-tauri/src/lib.rs`,
+`src-tauri/src/island.rs`, `src-tauri/src/media.rs`,
+`src-tauri/src/commands.rs`, `src-tauri/shim/desktop.js`,
+`app/island.html`, `app/src/island/main.ts`, `app/src/island/island.css`,
+`app/src/components/music/TrackMenu.tsx`,
+`app/src/components/music/Lockups.tsx`, `app/src/shell/PlayerBar.tsx`,
+`app/src/shell/FullScreenPlayer.tsx`, `app/src/shell/SidePanel.tsx`,
+`app/src/shell/Sidebar.tsx`, `app/src/shell/WindowControls.tsx`,
+`app/src/state/player.ts`, `app/src/data/music/queries.ts`. No file
+removed; every change additive or corrective.

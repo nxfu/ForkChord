@@ -1,5 +1,6 @@
-import { ChevronLeft, ListMusic, Settings } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router';
+import { ChevronLeft, ChevronRight, ListMusic, Settings } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate, useNavigationType } from 'react-router';
 import { PrefetchLink, PrefetchNavLink } from '@/components/PrefetchLink';
 import { LogoMark } from '@/components/icons/LogoMark';
 import {
@@ -131,11 +132,29 @@ function SpotifyNav({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
-// The sidebar's back button, styled like the settings button it sits opposite
-// (a ghost icon that fills on hover); disabled while the app's history is
-// still on its first page.
-const back =
-  'grid size-7 flex-none place-items-center rounded-nav text-secondary hover:bg-quinary hover:text-primary disabled:pointer-events-none disabled:opacity-35';
+// The sidebar's back and forward buttons, right of the wordmark and styled
+// like the settings button they sit opposite (ghost icons that fill on
+// hover); each sleeps while its direction has nowhere to go.
+const nav = 'grid size-7 flex-none place-items-center rounded-nav text-secondary hover:bg-quinary hover:text-primary disabled:pointer-events-none disabled:opacity-35';
+
+/** How far the app's history reaches, per direction. react-router stamps the
+ * depth into every entry's history.state; the highest index reached is the
+ * ceiling a forward press can return to. A POP (back/forward) may move
+ * anywhere inside it; a PUSH or REPLACE cuts the future off at the new
+ * entry, exactly as the entries themselves are cut. */
+function useHistoryDepth(): { canGoBack: boolean; canGoForward: boolean } {
+  const location = useLocation();
+  const navType = useNavigationType();
+  const stamped: unknown = window.history.state?.idx;
+  const idx = typeof stamped === 'number' ? stamped : null;
+  const [maxIdx, setMaxIdx] = useState(idx ?? 0);
+  useEffect(() => {
+    if (idx === null) return;
+    if (navType === 'POP') setMaxIdx((highest) => Math.max(highest, idx));
+    else setMaxIdx(idx);
+  }, [idx, navType]);
+  return { canGoBack: idx !== null && idx > 0, canGoForward: idx !== null && idx < maxIdx };
+}
 
 /** The left glass sidebar (report §1). */
 export function Sidebar() {
@@ -145,12 +164,7 @@ export function Sidebar() {
   const spotifySignedIn = useSpotifySignedIn();
   const close = () => setDrawerOpen(false);
   const navigate = useNavigate();
-  // Subscribing to the location keeps the depth check honest: the sidebar
-  // re-renders on every navigation, including back and forward.
-  useLocation();
-  // react-router stamps the depth into every entry's history.state; the
-  // button sleeps until there is somewhere to go back to.
-  const canGoBack = typeof window.history.state?.idx === 'number' && window.history.state.idx > 0;
+  const { canGoBack, canGoForward } = useHistoryDepth();
 
   return (
     <>
@@ -164,27 +178,43 @@ export function Sidebar() {
             app's brand in the app's own navigation, not a window-bar title.
             (It's the frameless window's top edge that stays brandless: the
             transparent top bar carries only the window buttons.) The block's
-            height also keeps the macOS traffic lights their air. The back
-            chevron rides the same row, macOS-style, over the brand's air. */}
+            height also keeps the macOS traffic lights their air. The back and
+            forward chevrons ride the same row to the wordmark's right, a gap
+            over, in the settings button's ghost style. */}
         <div className="mt-2 ml-2 flex h-18 items-center gap-1.5 px-5">
-          <button
-            type="button"
-            className={back}
-            aria-label="Back"
-            title="Back"
-            disabled={!canGoBack}
-            onClick={() => {
-              navigate(-1);
-              close();
-            }}
-          >
-            <ChevronLeft size={19} strokeWidth={2} />
-          </button>
           <PrefetchLink to="/home" className="inline-flex items-center gap-2 rounded-[6px]" aria-label="BitChord, Home" onClick={close}>
             {/* White on dark, as Apple's own wordmark; it follows the label colour so it stays visible in light. */}
             <LogoMark size={22} className="text-primary" />
             <span className="type-[700_19px/24px] tracking-[-0.01em]">BitChord</span>
           </PrefetchLink>
+          <div className="ml-2.5 flex items-center gap-0.5">
+            <button
+              type="button"
+              className={nav}
+              aria-label="Back"
+              title="Back"
+              disabled={!canGoBack}
+              onClick={() => {
+                navigate(-1);
+                close();
+              }}
+            >
+              <ChevronLeft size={19} strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              className={nav}
+              aria-label="Forward"
+              title="Forward"
+              disabled={!canGoForward}
+              onClick={() => {
+                navigate(1);
+                close();
+              }}
+            >
+              <ChevronRight size={19} strokeWidth={2} />
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto pr-3 pl-5 [scrollbar-width:none]">
           <NavList items={PRIMARY} onNavigate={close} />

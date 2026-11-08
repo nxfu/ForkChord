@@ -99,9 +99,10 @@ function TrackMenuItems({ track, onClose }: { track: Track; onClose: () => void 
 /**
  * The ⋯ button at the end of a track row (report §14): Play Next and Add to
  * Queue for everyone; Favorite and Add to Playlist signed in. The same menu
- * also serves the row's right-click: `contextPoint` carries the click's
- * cursor position and the menu opens there instead of the button, like a
- * native context menu.
+ * also serves right-clicks, like a native context menu: `contextPoint`
+ * carries a click's cursor position for hosts that open it from anywhere in
+ * a larger region (a track row, a card, the player's LCD), and a right-click
+ * on the ⋯ button itself opens it right where the pointer is.
  */
 export function TrackMenu({
   track,
@@ -123,11 +124,15 @@ export function TrackMenu({
   onContextClose?: () => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // The button's own right-click; separate from the host's contextPoint so
+  // both can be open-candidates whichever arrives.
+  const [ownPoint, setOwnPoint] = useState<{ x: number; y: number } | null>(null);
   const close = useCallback(() => {
     setAnchor(null);
+    setOwnPoint(null);
     onContextClose?.();
   }, [onContextClose]);
-  const fromCursor = contextPoint ?? null;
+  const fromCursor = contextPoint ?? ownPoint;
   const open = anchor !== null || fromCursor !== null;
   useEffect(() => {
     onOpenChange?.(open);
@@ -145,7 +150,14 @@ export function TrackMenu({
           setAnchor(anchor ? null : event.currentTarget);
         }}
         onDoubleClick={(event) => event.stopPropagation()}
-        onContextMenu={(event) => event.stopPropagation()}
+        onContextMenu={(event) => {
+          // Right-click on the ⋯ itself: the same menu, at the cursor, the
+          // way the row's own right-click opens it. Kept off the host's
+          // handlers so the two paths can't race.
+          event.preventDefault();
+          event.stopPropagation();
+          setOwnPoint({ x: event.clientX, y: event.clientY });
+        }}
       >
         <MoreHorizontal size={18} strokeWidth={2} />
       </button>
