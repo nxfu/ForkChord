@@ -253,6 +253,21 @@ pub async fn window_start_drag(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The macOS traffic lights, from the page: the full-screen player owns the
+/// whole window while it is up, and its own close button sits exactly where
+/// the lights hang (TitleBarStyle::Overlay keeps them over the glass), so the
+/// player's open state hides them and its close brings them back. chrome.rs
+/// does the hiding; on Windows and Linux this is a no-op (the frameless
+/// build has no lights, and WindowControls already stands down in the
+/// player). Async for the same reason every window-touching command here is:
+/// the off-main-thread path is the safe one, and the job hops to the main
+/// thread inside.
+#[tauri::command]
+pub async fn set_traffic_lights_visible(visible: bool, app: AppHandle) -> Result<(), String> {
+    chrome::set_traffic_lights_visible(&app, visible);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn island_resize(expanded: bool, app: AppHandle) -> Result<(), String> {
     island::apply_size(&app, expanded);

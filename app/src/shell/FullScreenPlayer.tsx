@@ -26,13 +26,13 @@ import { useUi } from '@/state/ui';
 import { useHasVideo, useVideo } from '@/state/video';
 import { Credits, PageLink, pageLink } from './Lcd';
 import { LyricsPanel } from './LyricsPanel';
-import { MeshBackdrop } from './MeshBackdrop';
 import { albumPageFor } from './nowPlayingLinks';
 import { UpNext } from './UpNext';
 import { MixWindowHighlight, NerdStats } from './NerdStats';
 import { useScrubber } from './useScrubber';
 import { VideoQuality } from './VideoQuality';
 import { fadeForVolume, VolumeControl } from './VolumeControl';
+import { ArtworkBackdrop } from './ArtworkBackdrop';
 
 function useBrowserFullScreen(): boolean {
   return useSyncExternalStore(
@@ -115,8 +115,15 @@ function Transport() {
 }
 
 // Close, browser full screen, the column toggles and the speaker, in the corners.
+//
+// The Kotlin player's LandscapeChromeButton is the treatment: "a plain icon at
+// two-thirds white that lights to full white over the faintest disc when the
+// cursor reaches it, and gives a little as it is pressed". The on-dark tokens
+// already spell the colours (secondary is white at 64%, quinary white at 10%,
+// primary white at 92%); the press squeeze and the scale riding the same
+// 100 ms transition are the port.
 const chromeButton =
-  'grid size-8 place-items-center rounded-full text-secondary transition-[background-color,color] duration-100 ease-in hover:bg-quinary hover:text-primary';
+  'grid size-8 place-items-center rounded-full text-secondary transition-[background-color,color,scale] duration-100 ease-in hover:bg-quinary hover:text-primary active:scale-90';
 const chrome = `absolute z-1 ${chromeButton}`;
 const artworkLayer = 'absolute inset-0 size-full rounded-[inherit] object-cover opacity-0 transition-opacity duration-300 ease-in';
 
@@ -245,7 +252,11 @@ export function FullScreenPlayer() {
       onKeyDown={wake}
       style={theater && playing && idle ? { cursor: 'none' } : undefined}
     >
-      <MeshBackdrop artworkUrl={nowPlaying.artworkUrl} playing={playing} />
+      {/* The Kotlin player's backdrop: the artwork's own colours as a still
+          mesh, with the box-blurred cover cropped over it once it is read —
+          an immersive sleeve, where a quantiser's palette painted the whole
+          screen one colour. */}
+      <ArtworkBackdrop artworkUrl={nowPlaying.artworkUrl} />
       {theater && (
         <div className="absolute inset-0 animate-fade-in bg-black">
           <VideoSurface fit="contain" className="size-full" />
@@ -253,7 +264,8 @@ export function FullScreenPlayer() {
       )}
 
       <button ref={close} className={`${corner} top-4 left-5`} aria-label="Close" onClick={() => setFullScreen(false)}>
-        <X size={20} />
+        {/* The landscape chrome's 18px glyph in its 32px disc. */}
+        <X size={18} strokeWidth={1.8} />
       </button>
       {/* The music video's quality, just inside the full-screen button. */}
       {video && (

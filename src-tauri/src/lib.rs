@@ -5,6 +5,7 @@
 //! single instance and launch-at-login.
 
 mod agent;
+mod chrome;
 mod commands;
 mod island;
 mod media;
@@ -80,6 +81,7 @@ pub fn run() {
             commands::window_toggle_maximize,
             commands::window_hide,
             commands::window_start_drag,
+            commands::set_traffic_lights_visible,
         ])
         .setup(|app| {
             let data_dir = app
@@ -157,9 +159,14 @@ pub fn run() {
             });
 
             // The desktop player reports state through the shim; mirror it
-            // into MPRIS / Now Playing on the platforms where the webview
-            // can't (Linux, macOS). Windows uses WebView2's own session.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            // into the platform players the webview can't own: MPRIS on
+            // Linux, SMTC on Windows (the volume flyout, the lock screen and
+            // the hardware keys — WebView2's own media session never
+            // surfaces at system level). macOS registers nothing: WKWebView
+            // puts the playing element on Now Playing by itself, and a
+            // registration of our own used to stand beside it as a second
+            // player (media.rs::attach).
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             media::attach(app.handle());
 
             // bitchord://party/<CODE> invites open the Listen Together page.

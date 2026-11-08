@@ -18,6 +18,7 @@
     "allow-window-minimize",
     "allow-window-toggle-maximize",
     "allow-window-hide",
-    "allow-window-start-drag"
+    "allow-window-start-drag",
+    "allow-set-traffic-lights-visible"
   ]
 }

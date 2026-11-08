@@ -93,3 +93,8 @@ commands.allow = ["window_hide"]
 identifier = "allow-window-start-drag"
 description = "Lets the page's transparent top bar drag the frameless main window from empty top-of-window space, the way the native caption used to."
 commands.allow = ["window_start_drag"]
+
+[[permission]]
+identifier = "allow-set-traffic-lights-visible"
+description = "Lets the page hide and show macOS's traffic lights — hidden for as long as the full-screen player is open, whose own close button sits exactly where the lights hang; a no-op on the frameless platforms."
+commands.allow = ["set_traffic_lights_visible"]

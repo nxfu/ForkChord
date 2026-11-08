@@ -1,12 +1,20 @@
 //! Native media controls. The web frontend drives `navigator.mediaSession`
 //! through the shim; this module mirrors that state into the platform's
-//! player: MPRIS on Linux (souvlaki) and the macOS Now Playing widget
-//! (souvlaki). Windows needs nothing here — WebView2's own media session
-//! already owns SMTC and the hardware keys — but the tray still reads the
-//! snapshot for its Play/Pause label.
+//! player: MPRIS on Linux (souvlaki) and SMTC on Windows (souvlaki with the
+//! main window's HWND — the thing that puts BitChord on the volume flyout,
+//! the lock screen and the hardware media keys at system level; WebView2's
+//! own media session never surfaces there, which is why the controls used to
+//! be Linux-only and Windows had nothing at all). macOS deliberately does
+//! not register here — see [attach]. The tray reads the snapshot on every
+//! platform for its Play/Pause label.
 
 use tauri::{AppHandle, Manager};
 
+// The platform player — souvlaki — is only constructed on the two platforms
+// that have no player of their own. macOS's WKWebView registers the playing
+// element with Now Playing by itself (see [attach]), so none of this compiles
+// there.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig};
 
 use crate::commands::{platform_name, AppState, MediaUpdate};
@@ -24,21 +32,51 @@ pub struct MediaSnapshot {
 }
 
 // The controls live on the main thread (a requirement on macOS; harmless on
-// Linux), so async commands reach them through `run_on_main_thread`.
+// Linux and Windows), so async commands reach them through `run_on_main_thread`.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 thread_local! {
     static CONTROLS: std::cell::RefCell<Option<MediaControls>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Creates the platform controls and wires their buttons into the page.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+///
+/// Linux gets MPRIS. Windows gets SMTC through souvlaki's
+/// `ISystemMediaTransportControlsInterop::GetForWindow`, pointed at the main
+/// window's HWND; souvlaki sets the music properties, the thumbnail and the
+/// timeline on every update this module receives, and its `ButtonPressed`
+/// handler feeds the same `__BitChordMediaAction` eval path the tray uses —
+/// so the volume flyout, the lock screen and the keyboard's media keys all
+/// drive the page. (attach runs in `setup`, on the main thread, which is
+/// where a WinRT interop object wants to live; the event callbacks arrive
+/// through that thread's message pump, which tao runs.)
+///
+/// macOS registers nothing, on purpose: WKWebView registers the playing
+/// element with the system Now Playing on its own — the entry that shows the
+/// track, the artist and the working buttons. souvlaki's separate
+/// registration used to stand BESIDE that one, and the media panel showed
+/// two players for one song: a bare "BitChord" card and the webview's own.
+/// With souvlaki out of the way the webview's card is the only one, and the
+/// hardware keys come through WebKit's own handling of the same element.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn attach(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    let hwnd: Option<*mut std::ffi::c_void> = match app.get_webview_window("main") {
+        Some(window) => match window.hwnd() {
+            Ok(hwnd) => Some(hwnd.0 as *mut std::ffi::c_void),
+            Err(error) => {
+                log::warn!("media controls unavailable: no HWND: {error}");
+                return;
+            }
+        },
+        None => return,
+    };
+    #[cfg(target_os = "linux")]
+    let hwnd: Option<*mut std::ffi::c_void> = None;
     let config = PlatformConfig {
         dbus_name: "bitchord",
         display_name: "BitChord",
-        hwnd: None,
+        hwnd,
     };
-    // attach takes &mut self — and this whole path is cfg'd to Linux/macOS,
-    // so a Windows-only build never saw it.
     let mut controls = match MediaControls::new(config) {
         Ok(controls) => controls,
         Err(error) => {
@@ -55,9 +93,15 @@ pub fn attach(app: &AppHandle) {
     CONTROLS.with(|cell| *cell.borrow_mut() = Some(controls));
 }
 
-#[cfg(target_os = "windows")]
+/// macOS: no controls of our own — see [attach] for why the webview's own
+/// Now Playing entry is the one the system shows.
+#[cfg(target_os = "macos")]
 pub fn attach(_app: &AppHandle) {}
 
+/// The OS pressed a button: turn it into the page's own action vocabulary.
+/// Only reachable where controls exist (Linux, Windows) — macOS's hardware
+/// keys arrive through WebKit's own element handling.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn handle_event(app: &AppHandle, event: MediaControlEvent) {
     // The page binds play and pause separately, each guarded by the player's
     // own state; Toggle resolves against the last reported state.
@@ -151,7 +195,7 @@ pub fn apply_update(app: &AppHandle, update: MediaUpdate) {
     }
     *state.media.lock().unwrap() = snapshot.clone();
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         let for_controls = snapshot.clone();
         let kind = update.kind.clone();

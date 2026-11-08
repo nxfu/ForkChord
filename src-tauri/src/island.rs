@@ -113,9 +113,22 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     }
     let window = builder.build()?;
     recenter(&window, MINI_SIZE.0);
-    // The page is hidden until its first sync; clicks pass through it.
-    let _ = window.set_ignore_cursor_events(true);
-    let _ = window.show();
+    // The page is hidden until its first sync; clicks pass through it. On
+    // Linux the request has to wait for the window's realization (see
+    // [arm_click_through] — tao unwraps the GdkWindow and a never-shown
+    // window has none), so the window is shown first and the request is
+    // armed; the other platforms accept it on an unshown window, where the
+    // old order leaves zero unclickable gap.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.show();
+        arm_click_through(app, true);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window.set_ignore_cursor_events(true);
+        let _ = window.show();
+    }
     Ok(())
 }
 
@@ -291,11 +304,66 @@ fn apply_geometry(window: &tauri::WebviewWindow, width: f64, height: f64) {
 }
 
 /// While hidden the pill must not block what is under it — a transparent
-/// window otherwise swallows clicks on its whole rectangle.
+/// window otherwise swallows clicks on its whole rectangle. On Linux the
+/// flip rides the same arm the initial click-through does (see
+/// [arm_click_through]), which also covers a flip that lands before the
+/// first show has been processed; elsewhere the request is safe to send
+/// straight through.
 pub fn set_click_through(app: &AppHandle, ignore: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        arm_click_through(app, ignore);
+    }
+    #[cfg(not(target_os = "linux"))]
     if let Some(window) = app.get_webview_window("island") {
         let _ = window.set_ignore_cursor_events(ignore);
     }
+}
+
+/// Linux: arming click-through has to wait for the window's GdkWindow.
+///
+/// tao's `set_ignore_cursor_events(true)` panics on Linux
+/// (event_loop.rs:459, `window().unwrap()`) when the gtk window has no
+/// GdkWindow — and a gtk window only gets one when it is first shown
+/// (realized). The island is created hidden and click-through, exactly that
+/// state, so the request used to land before the show queued just after it
+/// had ever run and killed the whole app at launch. The request is now sent
+/// from a glib idle that re-checks the window on every pass: gone → stop;
+/// still unrealized → retry (bounded at 250 passes, then a warning and
+/// give-up — a click-eating pill is better than a dead app); realized → send
+/// the real request and stop. Every pass lets the main loop run, so the
+/// show queued just before is processed while we wait and the arm lands one
+/// or two passes later. Runs on the main thread end to end —
+/// `idle_add_local` must be called from the thread owning the default main
+/// context, and only the `Send` handle crosses into it.
+#[cfg(target_os = "linux")]
+fn arm_click_through(app: &AppHandle, ignore: bool) {
+    use gtk::prelude::WidgetExt;
+
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let tries = std::cell::Cell::new(0u32);
+        gtk::glib::idle_add_local(move || {
+            let Some(window) = handle.get_webview_window("island") else {
+                return gtk::glib::ControlFlow::Break; // torn down while waiting
+            };
+            let realized = window
+                .gtk_window()
+                .map(|gtk_window| gtk_window.window().is_some())
+                .unwrap_or(false);
+            if !realized {
+                let passes = tries.get() + 1;
+                if passes > 250 {
+                    log::warn!("dynamic island: window never realized; click-through not armed");
+                    return gtk::glib::ControlFlow::Break;
+                }
+                tries.set(passes);
+                return gtk::glib::ControlFlow::Continue;
+            }
+            let _ = window.set_ignore_cursor_events(ignore);
+            gtk::glib::ControlFlow::Break
+        });
+    });
 }
 
 /// The island's presses, resolved the same way the tray's menu items are:

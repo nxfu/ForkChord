@@ -52,9 +52,9 @@ type Internals = {
 
 /** Best-effort by design: a failed window command is a missed click, not a
  * dead page. */
-function press(cmd: string): void {
+function press(cmd: string, args?: Record<string, unknown>): void {
   const internals = (window as unknown as { __TAURI_INTERNALS__?: Internals }).__TAURI_INTERNALS__;
-  void internals?.invoke(cmd).catch(() => undefined);
+  void internals?.invoke(cmd, args).catch(() => undefined);
 }
 
 export function WindowControls() {
@@ -66,6 +66,19 @@ export function WindowControls() {
   // The caption buttons are the replacement for a removed native frame:
   // Windows and Linux. macOS keeps the traffic lights it was built with.
   const buttons = active && platform !== 'macos';
+
+  // macOS's traffic lights float over the glass and do not stand down on
+  // their own — the player's close button sits exactly where they hang, and
+  // the two collide (the report's screenshot has the white X half under the
+  // red light). While the player is up they hide; closing it brings them
+  // back. The command is a no-op on the frameless platforms, which have no
+  // lights for the player to collide with.
+  useEffect(() => {
+    if (!present || platform !== 'macos') return;
+    // Both directions ride the same effect: closing the player is just
+    // fullScreen flipping false, and the restore is that call.
+    press('set_traffic_lights_visible', { visible: !fullScreen });
+  }, [present, platform, fullScreen]);
 
   useEffect(() => {
     if (!active) return;

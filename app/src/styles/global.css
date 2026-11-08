@@ -105,6 +105,21 @@
 }
 
 /*
+ * The backdrop mesh's crossfade (ArtworkBackdrop, the 900 ms Kotlin
+ * MESH_FADE_MS): the newest layer fades in over whatever it replaces. A plain
+ * rule, outside @theme, because the backdrop references it from an arbitrary
+ * animate-[…] utility.
+ */
+@keyframes backdrop-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
  * The tokens (tokens.css) as Tailwind colours, radii and easings. Inline, so
  * a utility reads the token where it's used: tinted pages (data-tint) and
  * the dark appearance redefine them below :root.
@@ -325,47 +340,78 @@
     text-rendering: optimizeLegibility;
     /* Apple's player is an app, not a document: no rubber-band on the page. */
     overscroll-behavior: none;
+    /* An app, not a document: a click-drag across a cover, a lyric or a
+       control must never start a selection, and a double-click must never
+       paint one (both engines select text on those gestures by default).
+       Fields keep theirs — the search box and the settings fields are typed
+       into, and their text must still cut and copy. */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* The one place text is the content: fields, and anything that opts in
+     (the settings page's editable rows, the extension page's install hints). */
+  input,
+  textarea,
+  select,
+  [contenteditable]:not([contenteditable='false']) {
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   #root {
     height: 100%;
   }
 
-  /* The page's scrollbar, not the OS's. The classic Windows bar (arrow
-     buttons, track, ~17px of chrome) belongs to documents, not to an
-     Apple-Music-styled app — and it is exactly what shows up when a page
-     outgrows its window. From here on the main scroller (#scrollable-page)
-     and the document itself get the app's own materials instead: a thin,
-     rounded thumb over a transparent track, no arrows, appearing only when
-     there is something to scroll. (The sidebar and the shelves hide their
-     scrollbars outright; this is the middle ground for the one view where
-     mouse users still need the affordance.) */
+  /* The page's scrollbar, ported from the Kotlin app's AppleScrollbar
+     (sharedUi/…/components/AppleScrollbar.jvm.kt): macOS's overlay bar in
+     macOS's colours — a 7px hairline of grey that only really arrives when the
+     pointer comes for it, drawn OVER the right edge of its pane rather than
+     beside it. The resting colour is "the faintest grey that still reads
+     against both the app's dark chrome and a white page" (0x2EABABB2), the
+     hover colour its lit 0x8CABABB2, the thumb never shorter than the 26dp
+     minimalHeight, and the Compose bar's 3dp/6dp insets stay with the pane's
+     own padding. The track is invisible: the pane's own edge is the
+     affordance.
+
+     WebKit pseudo-elements only, deliberately without the standard
+     scrollbar-color pair: a set scrollbar-width already switches Chromium
+     (WebView2) to its native thin bar — rectangular, no rounding, no hover
+     colour — and disables these styles outright. (The sidebar and the shelves
+     still hide their scrollbars with their own utilities; those outrank
+     everything here.) */
   #scrollable-page,
   html {
     scrollbar-width: thin;
-    scrollbar-color: var(--systemTertiary) transparent;
   }
   #scrollable-page::-webkit-scrollbar,
+  #scrollable-page *::-webkit-scrollbar,
   html::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
   }
   #scrollable-page::-webkit-scrollbar-track,
   #scrollable-page::-webkit-scrollbar-corner,
+  #scrollable-page *::-webkit-scrollbar-track,
+  #scrollable-page *::-webkit-scrollbar-corner,
   html::-webkit-scrollbar-track,
   html::-webkit-scrollbar-corner {
     background: transparent;
   }
   #scrollable-page::-webkit-scrollbar-thumb,
+  #scrollable-page *::-webkit-scrollbar-thumb,
   html::-webkit-scrollbar-thumb {
-    border-radius: 4px;
-    background-color: var(--systemTertiary);
+    min-height: 26px;
+    border-radius: 999px;
+    background-color: rgb(171 171 178 / 0.18);
   }
   #scrollable-page::-webkit-scrollbar-thumb:hover,
+  #scrollable-page *::-webkit-scrollbar-thumb:hover,
   html::-webkit-scrollbar-thumb:hover {
-    background-color: var(--systemSecondary);
+    background-color: rgb(171 171 178 / 0.55);
   }
   #scrollable-page::-webkit-scrollbar-button,
+  #scrollable-page *::-webkit-scrollbar-button,
   html::-webkit-scrollbar-button {
     display: none;
     width: 0;

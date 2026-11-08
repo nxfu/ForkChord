@@ -26,6 +26,7 @@
 //! uses; the shim's `document.cookie` reports stay as the fallback for
 //! engines without a native cookie API.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -78,6 +79,53 @@ const SPOTIFY_CAPTURE_ORIGINS: &[(&str, &str)] = &[
     ("https://accounts.spotify.com/", ".spotify.com"),
 ];
 
+/// The hosts each service's sign-in flow may land on. The capture only
+/// harvests a service while the window's page is on one of its hosts: a
+/// browser tab holds the session of the site it is ON, not of every site the
+/// engine's persistent store has ever seen — and on macOS the whole store is
+/// shared by every agent window, so without this gate a Discord sign-in
+/// window would keep reporting the YouTube session it never navigated to
+/// (which is exactly what yanked the window away before the user could
+/// touch it).
+const YT_PAGE_HOSTS: &[&str] = &["youtube.com", "google.com"];
+const SPOTIFY_PAGE_HOSTS: &[&str] = &["spotify.com"];
+
+/// The cookies that say WHICH YouTube session this is, as name → value from
+/// [dump]. The rest of the jar is churn: `__Secure-1PSIDTS` and friends
+/// rotate on their own — on the core's API calls, on the page's own
+/// requests — and a rotation is not a sign-in, so it must never close the
+/// window. A different account, or a first sign-in, changes one of these.
+const YT_IDENTITY_COOKIES: &[&str] = &["SAPISID", "__Secure-1PSID", "__Secure-3PSID", "SID"];
+
+fn identity_cookies(dump: &str) -> HashMap<String, String> {
+    let mut pairs = HashMap::new();
+    for segment in dump.split(['\n', ';']) {
+        let Some((name, value)) = segment.trim().split_once('=') else { continue };
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() || is_cookie_attribute(name) {
+            continue;
+        }
+        if YT_IDENTITY_COOKIES.contains(&name) {
+            pairs.insert(name.to_string(), value.to_string());
+        }
+    }
+    pairs
+}
+
+/// Whether the report's identity cookies are the ones the window opened
+/// with: every identity cookie the report carries must match the baseline's
+/// value. The report may carry FEWER of them than the baseline — the shim's
+/// `document.cookie` never sees the HttpOnly identity cookies, and YouTube's
+/// session is carried by exactly those — which is the same session seen
+/// through a smaller window, not a new one. An empty baseline (signed out at
+/// open, or the first-ever read) fails every comparison, which is what a
+/// fresh sign-in should do.
+fn identity_unchanged(at_open: &HashMap<String, String>, report: &str) -> bool {
+    let pairs = identity_cookies(report);
+    pairs.iter().all(|(name, value)| at_open.get(name).is_some_and(|held| held == value))
+}
+
 /// A plain Chrome user agent. The embedded engines (WebView2, WKWebView,
 /// WebKitGTK) are identified as such by the live services, and Google answers
 /// their sign-in pages with "This browser or app may not be secure"; a normal
@@ -101,32 +149,47 @@ fn agent_script() -> &'static str {
 }
 
 /// The agent window's per-open state: the session values the window started
-/// with, and the last YouTube report seen. A report that merely re-states
-/// the session the window was opened with must not close it — a user who
-/// reopens sign-in to switch accounts would get the window yanked away
-/// before they could act. Only a *changed* session closes the window, and
-/// only once the core verified it.
+/// with, and the last YouTube report seen. A report that merely re-states the
+/// session the window was opened with must not close it — a user who reopens
+/// sign-in to switch accounts would get the window yanked away before they
+/// could act. Only a *changed* session closes the window, and only once the
+/// core verified it.
+///
+/// The baselines are the window's OWN store at open time (taken in
+/// [open_signin] once the window exists), not the core's jar. That is the
+/// fix for the macOS instant close: WKWebView's default data store is
+/// persistent and shared by every agent window, so it keeps the YouTube
+/// session of every sign-in that came before — and a report of that session
+/// lands 1.5 s after any agent window opens, Discord or Google alike. The
+/// old baseline (the core jar's fingerprint) never matched such a report —
+/// the jar re-serialises what it absorbed, and YouTube rotates its
+/// `__Secure-1PSIDTS` on the core's own API calls, so jar and webview store
+/// always differed in at least one value — so `fresh.signed_in` plus "a
+/// changed session" closed the window before the page had painted. The
+/// identity-cookie comparison below (see [identity_unchanged]) reports the
+/// same session as unchanged, whatever shape the report arrives in.
 pub struct AgentState {
     /// Fingerprint of the last accepted yt cookie report.
     pub yt_seen: Mutex<Option<String>>,
-    /// Fingerprint of the yt session at window-open time.
-    pub yt_at_open: Mutex<String>,
-    /// sp_dc at window-open time.
+    /// The YouTube identity cookies the window's webview store held at open
+    /// time, as name → value.
+    pub yt_at_open: Mutex<HashMap<String, String>>,
+    /// sp_dc at window-open time (the window's own store's value).
     pub spotify_at_open: Mutex<String>,
     /// Discord token at window-open time.
     pub discord_at_open: Mutex<String>,
 }
 
 impl AgentState {
-    pub fn snapshot(core: &bitchord_core::Core) -> AgentState {
+    /// Empty baselines. The real ones are taken per open, from the agent
+    /// window's own store, in [open_signin] — nothing here can know what a
+    /// window that does not exist yet will hold.
+    pub fn snapshot(_core: &bitchord_core::Core) -> AgentState {
         AgentState {
             yt_seen: Mutex::new(None),
-            yt_at_open: Mutex::new(fingerprint(&core.yt.cookie_dump())),
-            spotify_at_open: Mutex::new(core.store.read(|d| d.sp_dc.clone()).unwrap_or_default()),
-            discord_at_open: Mutex::new(
-                core.store
-                    .read(|d| d.discord_account.as_ref().map(|a| a.token.clone()).unwrap_or_default()),
-            ),
+            yt_at_open: Mutex::new(HashMap::new()),
+            spotify_at_open: Mutex::new(String::new()),
+            discord_at_open: Mutex::new(String::new()),
         }
     }
 }
@@ -271,12 +334,29 @@ fn domain_matches(cookie_domain: &str, host: &str) -> bool {
         && host.as_bytes()[host.len() - domain.len() - 1] == b'.'
 }
 
+/// Whether [url]'s host belongs to one of [suffixes] — an exact match or a
+/// sub-domain of one, the way `SIGNIN_HOSTS` matches in commands.rs.
+fn on_service_page(url: &Result<tauri::Url, tauri::Error>, suffixes: &[&str]) -> bool {
+    let Ok(url) = url.as_ref() else { return false };
+    let Some(host) = url.host_str() else { return false };
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    suffixes
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
 /// One background thread polls the agent window's native cookie store for as
 /// long as the app runs — cheap when the window is absent, and the only
 /// source of the HttpOnly half of YouTube's session. It never runs on the
 /// main thread: like every cross-webview dispatch on Windows, that deadlocks
 /// the event loop. Reports go through the same [handle_report] the shim's
 /// IPC uses, so dedup and the close guards see one stream.
+///
+/// Each service is harvested only while the window's page is on that
+/// service's hosts (see YT_PAGE_HOSTS): the persistent webview store keeps
+/// every session the engine has ever held, and reading it for a window that
+/// is signing into something else reports a stale foreign session — which is
+/// what closed the freshly opened sign-in window on macOS.
 static CAPTURE_THREAD: AtomicBool = AtomicBool::new(false);
 
 pub fn start_capture(app: &AppHandle) {
@@ -291,11 +371,16 @@ pub fn start_capture(app: &AppHandle) {
             let Some(window) = app.get_webview_window("agent") else {
                 continue;
             };
-            if let Some(dump) = native_dump(&window, YT_CAPTURE_ORIGINS) {
-                let _ = tauri::async_runtime::block_on(handle_report(&app, "yt", &dump));
+            let page = window.url();
+            if on_service_page(&page, YT_PAGE_HOSTS) {
+                if let Some(dump) = native_dump(&window, YT_CAPTURE_ORIGINS) {
+                    let _ = tauri::async_runtime::block_on(handle_report(&app, "yt", &dump));
+                }
             }
-            if let Some(dump) = native_dump(&window, SPOTIFY_CAPTURE_ORIGINS) {
-                let _ = tauri::async_runtime::block_on(handle_report(&app, "spotify", &dump));
+            if on_service_page(&page, SPOTIFY_PAGE_HOSTS) {
+                if let Some(dump) = native_dump(&window, SPOTIFY_CAPTURE_ORIGINS) {
+                    let _ = tauri::async_runtime::block_on(handle_report(&app, "spotify", &dump));
+                }
             }
         });
     if spawned.is_err() {
@@ -314,13 +399,11 @@ pub fn open_signin(app: &AppHandle, kind: AgentKind, url: Option<String>) {
         Err(_) => return,
     };
 
-    // This open is the new baseline: only a session different from the one
-    // present *now* closes the window later (AgentState's `*_at_open`).
+    // Discord's token lives in the page's localStorage — reachable only from
+    // the page (the shim), so its baseline is the core's copy. YouTube's and
+    // Spotify's are taken from the window's own store below, once it exists.
     if let Some(state) = app.try_state::<AppState>() {
         let core = &state.core;
-        *state.agent.yt_at_open.lock().unwrap() = fingerprint(&core.yt.cookie_dump());
-        *state.agent.spotify_at_open.lock().unwrap() =
-            core.store.read(|d| d.sp_dc.clone()).unwrap_or_default();
         *state.agent.discord_at_open.lock().unwrap() = core
             .store
             .read(|d| d.discord_account.as_ref().map(|a| a.token.clone()).unwrap_or_default());
@@ -336,6 +419,7 @@ pub fn open_signin(app: &AppHandle, kind: AgentKind, url: Option<String>) {
             let _ = existing.show();
             let _ = existing.unminimize();
             let _ = existing.set_focus();
+            note_session_at_open(app, kind);
             start_capture(app);
             return;
         }
@@ -359,7 +443,41 @@ pub fn open_signin(app: &AppHandle, kind: AgentKind, url: Option<String>) {
             }
         })
         .build();
+    note_session_at_open(app, kind);
     start_capture(app);
+}
+
+/// Baselines the session the agent window ALREADY holds for [kind], read
+/// straight from the window's own webview store at open time — see
+/// [AgentState] for why the core's jar is the wrong source. Must run after
+/// the window exists (both of open_signin's paths call it then). The store
+/// read is page-independent, so a navigate() that has not landed yet changes
+/// nothing about it.
+fn note_session_at_open(app: &AppHandle, kind: AgentKind) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let origins = match kind {
+        AgentKind::Yt => YT_CAPTURE_ORIGINS,
+        AgentKind::Spotify => SPOTIFY_CAPTURE_ORIGINS,
+        // Nothing to read natively for a token in localStorage.
+        AgentKind::Discord => return,
+    };
+    let Some(window) = app.get_webview_window("agent") else {
+        return;
+    };
+    let dump = native_dump(&window, origins);
+    match kind {
+        AgentKind::Yt => {
+            *state.agent.yt_at_open.lock().unwrap() = identity_cookies(dump.as_deref().unwrap_or(""));
+        }
+        AgentKind::Spotify => {
+            *state.agent.spotify_at_open.lock().unwrap() = dump
+                .and_then(|dump| cookie_value(&dump, "sp_dc"))
+                .unwrap_or_default();
+        }
+        AgentKind::Discord => {}
+    }
 }
 
 /// What a report carries: a cookie dump (native lines or `document.cookie`),
@@ -396,8 +514,12 @@ pub async fn handle_report(app: &AppHandle, kind: &str, payload: &str) -> Result
                 // the window did not already hold: the user signed in or
                 // switched accounts. A "signed out" answer (mid-flow, or the
                 // report raced YouTube's own session setup) leaves the window
-                // up for the next poll.
-                let unchanged = *state.agent.yt_at_open.lock().unwrap() == mark;
+                // up for the next poll — and so does a report of the session
+                // the window opened with (see [identity_unchanged]): the
+                // window stays put for the account the user may still want
+                // to switch.
+                let at_open = state.agent.yt_at_open.lock().unwrap().clone();
+                let unchanged = identity_unchanged(&at_open, payload);
                 if fresh.signed_in && !unchanged {
                     if let Some(window) = app.get_webview_window("agent") {
                         let _ = window.close();

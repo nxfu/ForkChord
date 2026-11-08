@@ -39,9 +39,23 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsA
 # morph. The island moves and resizes in one NSWindow setFrame:display:
 # instead. objc2 is already in Cargo.lock (tao/wry pull it); pinned to the
 # same versions, this adds no second copy.
+#
+# objc2-app-kit is chrome.rs's traffic lights: the standard window buttons,
+# hidden for as long as the full-screen player is open. Same 0.3.2 the lock
+# already pins (wry pulls it, with the NSWindow/NSView/NSButton features
+# already enabled), so this adds no second copy either.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSButton",
+    "NSResponder",
+    "NSWindow",
+    "NSView",
+    "NSControl",
+    "objc2-core-foundation",
+] }
 
 # And on Linux: gdk_window_move_resize carries position and size in one
 # request (one X11 ConfigureWindow), where gtk's move + resize are two

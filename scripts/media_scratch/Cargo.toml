@@ -1,0 +1,11 @@
+[package]
+name = "media_scratch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The real crate, locked version: the Linux branch compiles against it for real.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+url = "2"

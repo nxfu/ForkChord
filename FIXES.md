@@ -1229,3 +1229,388 @@ every navigation, and closes the mobile drawer when it fires.
   point-anchor placement was exercised the same way: at the cursor, clamped
   at the right edge (x = innerWidth − 185 − 8), flipped above near the bottom
   with the left edge kept at the pointer.
+
+# Round — v1.9.7: the Linux launch panic in tao's event loop (event_loop.rs:459)
+
+**Symptom:** on Linux the app died at launch with
+
+    thread 'main' panicked at .../tao-0.37.2/src/platform_impl/linux/event_loop.rs:459:18:
+    called `Option::unwrap()` on a `None` value
+
+**Where that line is:** tao's handler for `WindowRequest::CursorIgnoreEvents`
+— the request `set_ignore_cursor_events` sends. The `true` branch is
+
+```rust
+window
+  .window()   // the gtk window's GdkWindow — Option
+  .unwrap()   // line 459: unconditional
+  .input_shape_combine_region(&empty_region, 0, 0);
+```
+
+`window()` is `WidgetExt::window`, the **GdkWindow**, and it is `None` until
+the gtk window is *realized* — which, for a toplevel, happens when it is
+first shown. There is no guard.
+
+**How the app hit it:** the island is created hidden and click-through —
+`island.rs::create` built the window with `.visible(false)` and called
+`set_ignore_cursor_events(true)` **before** `show()` (the old line 117 ahead
+of line 118). Windows and macOS accept the request on an unshown window
+(`WS_EX_TRANSPARENT` / `setIgnoresMouseEvents:` both do), so the order never
+hurt there. On Linux the queued `CursorIgnoreEvents` request was processed
+while the window had never been shown: `window()` answered `None`, the
+unwrap fired inside the main thread's event loop, and the process died. The
+island is on by default (`None` = on in the store), so this was a launch
+crash for every Linux user. The v1.9.6 round's Linux change — the atomic
+`gdk_window_move_resize` geometry — is a different code path entirely
+(Option-mapped, no unwrap) and neither caused nor fixed this.
+
+**Fix (`src-tauri/src/island.rs`):** on Linux, the click-through request is
+never sent for an unrealized window.
+
+* New `arm_click_through(app, ignore)` — hops to the main thread
+  (`run_on_main_thread`) and attaches a glib idle that re-checks the window
+  on every pass: island gone → stop; `gtk_window().window()` still `None` →
+  retry (bounded at 250 passes, then `log::warn!` and give-up — a
+  click-eating pill is better than a dead app, and in practice realization
+  lands on the first or second pass because every pass lets the main loop
+  process the show queued just before); realized → send the real
+  `set_ignore_cursor_events` and stop.
+* `create()` — Linux now shows the window first and then arms click-through.
+  The other platforms keep the old order, which works there and leaves zero
+  unclickable gap.
+* `set_click_through()` — the page's `island_overlay` flips ride the same
+  arm on Linux, which also covers a flip landing before the first show has
+  been processed; other platforms unchanged.
+
+The island page paints nothing until its first sync (its CSS starts fully
+transparent), so the one-or-two-idle gap between "on screen" and
+"click-through armed" is unobservable.
+
+**Why not patch tao:** guarding the unwrap upstream is a one-line `[patch]`
+fork of tao 0.37.2 — a vendored copy, a rewritten lock, and a maintenance
+tax on every future `cargo update`. The app-side arm is a `cfg(linux)`
+function that leaves the lock untouched and makes the panic unreachable, and
+`set_ignore_cursor_events` stays callable as before for every window that
+*has* been shown.
+
+**Verification this round**
+
+* No full Linux compile is possible on this host (no root; pkg-config finds
+  neither `gtk+-3.0` nor `webkit2gtk-4.1`), so the fix was verified the way
+  the earlier platform-specific rounds were:
+  * **Signature line-by-line against the locked crate sources** — tauri
+    2.12.5 `run_on_main_thread<F: FnOnce() + Send + 'static>` (app.rs:496),
+    `WebviewWindow::gtk_window() -> Result<gtk::ApplicationWindow>`
+    (webview_window.rs:1980, Linux-gated); gtk 0.18.2 re-exports glib
+    (`gtk/src/lib.rs:21 pub use glib;` — the tauri-pinned glib 0.18.5, no
+    new dependency and no second copy in the lock) and
+    `WidgetExt::window(&self) -> Option<gdk::Window>` (widget.rs:1100,
+    owned — `.is_some()` never lets the borrow escape); glib 0.18.5
+    `idle_add_local<F: FnMut() -> ControlFlow + 'static>` (source.rs:337 —
+    **no Send bound**, so the `Cell` pass counter is legal, but it must run
+    on the main-context thread, hence the `run_on_main_thread` hop), the
+    `ControlFlow` enum (control_flow.rs:14), and `SourceId` is not
+    `#[must_use]` (source.rs:21).
+  * **Behaviour + structure in a standalone scratch compile** (`rustc -D
+    warnings --edition 2021`, stubs mirroring those exact signatures; kept
+    in `scripts/island_arm_scratch/` of the fix bundle): the verbatim helper
+    body compiles clean, the `FnOnce + Send` outer closure carries only the
+    `Send` `AppHandle` (the non-Send `Cell` is created *inside* it), and the
+    four scenarios pass — window gone: breaks with no request; realized:
+    exactly one `ignore=true` request; never realized: the 250-pass give-up
+    logs and sends nothing, where the old code panicked on the first pass;
+    `ignore=false` flips forward unchanged.
+  * **No sibling unwrap on the island's request path:** tao's `Position`
+    (`window.move_`), `Size` (`window.resize`), `Visible`
+    (`show_all`/`hide`), `Resizable`, `Closable`, `Minimized`, `Maximized`
+    and `CursorIgnoreEvents(false)` handlers all take an unrealized window
+    without unwrapping — recenter, show and the geometry writes cannot trip
+    the same failure mode.
+* Front end untouched by this round (no TS/CSS change).
+
+
+---
+
+# Round — v1.9.7-mac: the link previews, the two players, the traffic lights, the vanishing sign-in windows, the Windows transport, the selections, and the backdrop (six reports, one macOS thread through them)
+
+Six reports from the v1.9.7 beta, three of them macOS-only, one Windows-only,
+two everywhere — plus the red screen. Each is reproduced from first principles
+against the locked crate sources (tauri 2.12.5, wry 0.57.1, tao 0.37.2,
+souvlaki 0.8.3, objc2-app-kit 0.3.2) before being fixed, in the rounds' usual
+way.
+
+## 1. Text selection is off everywhere but where text is typed
+
+A drag across a cover or a lyric painted a selection, and a double-click
+painted one over a control's label. The engine's default — select on drag and
+on double-click — belongs to documents, not to the player:
+
+* `app/src/styles/global.css` — `body` gets `user-select: none` (with the
+  `-webkit-` alias for WKWebView), and the fields that exist to be typed into
+  get `user-select: text` back: `input`, `textarea`, `select`, and anything
+  editable via `contenteditable`. Nothing in the app reads
+  `window.getSelection()` (checked), so nothing that worked before stops
+  working; the `::selection` rule stays, in case a field paints one.
+
+## 2. macOS: the "BitChord / tauri://localhost/home" tooltip is gone
+
+The hover tooltip over every link is WKWebView's link preview, and
+JavaScript cannot cancel it: WebKit computes the tooltip from the hit-tested
+element, not from any event the page can prevent. What the page *can* do is
+not have the `href`:
+
+* `src-tauri/shim/desktop.js` — a fifth section, macOS-only (the platform
+  lands with the shim's own `desktop_info` call, and the observer catches
+  everything rendered before it): a `MutationObserver` over
+  `attributeFilter: ['href']` and subtree childList moves every anchor's
+  `href` into `data-href` and keeps the element tabbable with
+  `tabindex="0"`. React Router's `Link` is a click handler that never reads
+  the attribute back (`shouldProcessLinkClick` checks button, target and
+  modifiers — verified against the installed react-router 8.4.0
+  `lib/dom/dom.js`), so navigation is untouched; keyboard focus still
+  reaches the link, and `PrefetchLink`'s focus-prefetch still fires. The
+  `_blank` interception gains the `data-href` fallback, so external links
+  still route to `open_external`.
+* Windows and Linux are untouched: WebView2 and WebKitGTK hang no tooltip on
+  hrefs.
+
+## 3. macOS: one player, not two
+
+The system media panel showed two cards for one song: a bare "BitChord" row
+with a replay button, and the track's own row ("FEAR" / NF, pause and next).
+The first card was souvlaki's registration (media.rs), the second the
+WKWebView's own — WebKit registers the playing element with Now Playing by
+itself, and `MPNowPlayingInfoCenter`'s default entry plus the webview's
+session are two players in one process.
+
+* `src-tauri/src/media.rs` — `attach` on macOS registers nothing now (the
+  webview's card is the one that shows the track, the artist and the working
+  buttons). The souvlaki import, the controls thread-local, `handle_event`
+  and the update block are `cfg`'d to the platforms that construct controls
+  (Linux, Windows). The tray and the island still read the snapshot from
+  `media_update`, which flows exactly as before; the snapshot logic is
+  untouched.
+
+## 4. macOS: the traffic lights no longer sit on the player's close button
+
+The full-screen player's close button (`top-4 left-5`) is exactly where
+`TitleBarStyle::Overlay` hangs the traffic lights, so the white X sat half
+under the red light. Windows and Linux already had this answer (Round 8: the
+page's own bar stands down in the player, and there is nothing native left to
+stand down); macOS now gets the same one by hiding the lights:
+
+* `src-tauri/src/chrome.rs` (new) — `set_traffic_lights_visible(app, visible)`
+  hops to the main thread (NSWindow is MainThreadOnly) and flips
+  `-[NSButton setHidden:]` on the three standard window buttons, the same
+  buttons tao's `inset_traffic_lights` reaches (`NSWindow.standardWindowButton`
+  → `Option<Retained<NSButton>>`, per objc2-app-kit 0.3.2's generated
+  NSWindow.rs:1645 and NSView.rs:255). A hidden flag, not a style-mask
+  change: the window keeps its frame, shadow and resizeability, and AppKit's
+  position-only resets (title changes, fullscreen transitions) do not
+  resurrect hidden buttons.
+* `src-tauri/src/commands.rs` — the async `set_traffic_lights_visible`
+  command; registered in `lib.rs`'s handler, granted through
+  `permissions/desktop-commands.toml` (`allow-set-traffic-lights-visible`,
+  the hyphenated-identifier route the other commands use) and
+  `capabilities/main.json`. On Windows and Linux it is a no-op.
+* `app/src/shell/WindowControls.tsx` — an effect keyed on
+  `{present, platform, fullScreen}` presses the command: lights hidden for as
+  long as the player is up, restored the moment it closes (Escape and the
+  player's own X both leave the player, so nothing is trapped).
+* `src-tauri/Cargo.toml` — `objc2-app-kit = "0.3.2"` on macOS: the same
+  version the lock already pins (wry pulls it, with NSWindow/NSView/NSButton
+  features enabled), so this adds an edge to the graph, not a second copy.
+  Cargo reconciles `Cargo.lock`'s dependency lists on the next build.
+
+## 5. macOS: the sign-in windows stopped vanishing after ~1.5 s
+
+Discord *and* Google sign-in windows closed on their own within about a
+second and a half of opening — before the page had finished loading — making
+Discord integration and YouTube sign-in impossible. Reproduced end to end:
+
+* The capture thread (agent.rs) polls the agent window's native cookie store
+  every 1.5 s, for YouTube and Spotify origins **regardless of which page
+  the window is on**. On macOS that store is WKWebView's default data store:
+  persistent on disk, shared by every agent window. A user who signed into
+  YouTube once (round 9 made that work) carries the whole session in it
+  forever.
+* So opening the Discord sign-in window produced a YouTube report 1.5 s
+  later — a session nobody navigated to. The close guard only checks that
+  the core verified the session and that it differs from the window's
+  baseline, and the baseline was the **core jar's fingerprint**, taken from
+  `core.yt.cookie_dump()`. Jar and webview store never fingerprint equal:
+  the jar re-serialises what it absorbed, and YouTube rotates
+  `__Secure-1PSIDTS` on the core's own API calls, so at least one pair
+  differed at every open. `fresh.signed_in && !unchanged` → close. The same
+  sequence fired for the Google window (the page loads signed in, the shim's
+  `document.cookie` reports, the jar never matches). Both windows died
+  before painting.
+* The scratch harness (`scripts/agent_scratch/`, kept in the fix bundle)
+  reproduces it: `fingerprint(core jar) != fingerprint(native dump)` on the
+  same session — the old guard fires — while every scenario the new guard
+  must hold, holds (below).
+
+Two fixes, both in `src-tauri/src/agent.rs`:
+
+* **Harvest the service the window is on.** The capture reads
+  `window.url()` (tauri 2.12.5 `WebviewWindow::url`, webview_window.rs:2506)
+  and polls a service's origins only while the page's host belongs to that
+  service — `youtube.com`/`google.com` for YouTube (the flow hops both),
+  `spotify.com` for Spotify. A Discord sign-in window can never produce a
+  YouTube report again, whatever the persistent store holds.
+* **Baseline the window's own store, not the core jar.** `open_signin` calls
+  `note_session_at_open` (both the reuse and the new-build paths) once the
+  window exists: the native dump for the kind's origins is taken and its
+  YouTube *identity* cookies (`SAPISID`, `__Secure-1PSID`, `__Secure-3PSID`,
+  `SID`) become the baseline as a name→value map. The close check is
+  `identity_unchanged`: every identity cookie the report carries must match
+  the baseline's value. The report may carry FEWER of them than the baseline
+  (the shim's `document.cookie` cannot see HttpOnly), which is the same
+  session through a smaller window, not a new one. A `__Secure-1PSIDTS`
+  rotation is not in the identity set — churn, not a sign-in — so it never
+  closes the window. An account switch, or a first sign-in on an empty
+  baseline, changes at least one value and closes after the core verified.
+  Spotify's baseline is now its own store's `sp_dc` (same principle);
+  Discord's token stays core-sourced (localStorage is only reachable from
+  the page, which is what reports it).
+
+`AgentState::snapshot` now produces empty baselines — the real ones are
+per-open; nothing can know what a window that does not exist yet holds.
+
+## 6. Windows: the playback controls are on the system level
+
+The volume flyout, the lock screen and the hardware media keys never showed
+BitChord. The previous rounds' note — "Windows needs nothing here,
+WebView2's own media session already owns SMTC" — was the assumption that
+failed: the shim forwarded `navigator.mediaSession` calls into the webview's
+native session on Windows, but that session does not surface as the system's
+System Media Transport Controls, and where a runtime does surface it, it
+would be a second player beside the shell's own.
+
+* `src-tauri/src/media.rs` — `attach` on Windows constructs souvlaki's
+  controls with the main window's HWND
+  (`WebviewWindow::hwnd()`, webview_window.rs:1966; `HWND.0` an isize — the
+  same access island.rs's `SetWindowPos` already shipped). souvlaki 0.8.3's
+  Windows platform is `SystemMediaTransportControlsInterop::GetForWindow`
+  with `SetIsEnabled`/`SetIsPlayEnabled`/… and a `ButtonPressed` handler —
+  read from the crate source (platform/windows/mod.rs), and its own
+  `examples/window.rs` runs it directly on a winit event-loop thread, the
+  same STA message pump tao runs. attach happens in `setup`, on the main
+  thread, where the interop object lives; button presses arrive through that
+  thread's pump and feed the existing `handle_event` →
+  `window.__BitChordMediaAction` path the tray and MPRIS already use.
+* `apply_update`'s controls block is `cfg(any(linux, windows))`: every
+  metadata update now sets the SMTC music properties and the thumbnail
+  (`CreateFromUri` for https covers), every playback/position update the
+  status and the timeline — play/pause/next/previous/seek from the volume
+  flyout and the lock screen drive the page.
+* `src-tauri/src/lib.rs` — `media::attach` now runs on Windows too (it was
+  `cfg(any(linux, macos))`, so the Windows build never even called it).
+* `src-tauri/shim/desktop.js` — the Windows passthrough to
+  `navigator.mediaSession` is removed (it never reached the system level,
+  it skipped every call that landed before `desktop_info` resolved, and it
+  never forwarded `setPositionState` — a half-wired session that could only
+  ever duplicate the shell's). souvlaki is the single SMTC owner; the shim's
+  header documents this.
+
+## 7. The full-screen player's backdrop: the Kotlin system, ported
+
+The player's background was one flat colour on red covers — the old web
+backdrop asked a quantiser what the artwork is "about" and painted four
+blobs of the answer, which for a nine-tenths-dark sleeve is one loud colour
+over the whole screen. The Kotlin app replaced exactly this approach, for
+exactly this reason (ArtworkMeshBackdrop.kt's own docstring names the red
+screen), with a two-layer system; it is ported here file for file:
+
+* `app/src/lib/artworkBackdrop.ts` — the mesh: the artwork decoded at
+  MESH_PX (120, a CDN-cached variant), averaged into a 6×6 grid of cell
+  means **flipped bottom-up** (row 0 is the sleeve's own bottom edge), each
+  cell lifted the Kotlin lift — saturation ×1.12, lightness floored at
+  0.045, via ColorUtils.RGBToHSL/HSLToColor ported as written "so the
+  phone's numbers do not move" — the rows below the seam cyclic-shifted
+  sideways by a seeded java.util.Random (BigInt LCG, `String.hashCode` for
+  the seed; mirrored half the time), and the grid resampled to 32×32 with
+  the smoothstep curve that flattens at every control point. A mean per
+  cell, not a quantised swatch: nine-tenths black stays nine-tenths black.
+  Plus the second layer: the same decode box-blurred 3 passes at radius
+  min(w,h)/12 (the sliding-window Kotlin pass), cached by URL (64 meshes, 8
+  blurs), with retry (4 attempts, 1.5 s apart) matching the Kotlin reader.
+* `app/src/shell/ArtworkBackdrop.tsx` — both layers stay mounted for the
+  whole song: the mesh under its 0.06→0.30 scrim (still, never animated —
+  the Kotlin mesh retired the blob mesh that paid a permanent 60 Hz blur for
+  a wallpaper), and the full-cover blur over its 0.34→0.48→0.64 legibility
+  scrim, cropped across the surface (`object-fit: cover` is Kotlin's
+  `ContentScale.Crop`). The mesh crossfades between tracks (900 ms, the
+  Kotlin MESH_FADE_MS, FastOutSlowIn) and holds what is on screen until the
+  new track's decode lands — wrong colour for one decode is the trade;
+  absent colour was the flicker. The blur fades in over 320 ms when a decode
+  arrives; a cached cover swaps without a fade; while it is up, the mesh
+  layer crossfades out (Kotlin's `alpha = 1f - fullArtworkBackdropAlpha`,
+  360 ms). The floor before any artwork is read is #121212, the Kotlin
+  FallbackBackdrop. The mesh's 32px blur is overscaled by 6% so the blur's
+  edge falloff stays outside the viewport.
+* `app/src/shell/FullScreenPlayer.tsx` — `<MeshBackdrop>` is replaced by
+  `<ArtworkBackdrop artworkUrl>`; the old component file stays in the tree
+  untouched, unused (no file was removed).
+
+## 8. The player's corner buttons and the scrollbar, from the Kotlin app
+
+* The corner buttons are the Kotlin player's `LandscapeChromeButton`:
+  32 px disc, 18 px glyph, an icon at two-thirds white that lights to full
+  white over the faintest disc on hover — the on-dark tokens already spell
+  those colours — and the port adds what was missing: the press squeeze
+  (`active:scale-90`) riding the same 100 ms transition. The close glyph is
+  18 px like the rest.
+* `app/src/styles/global.css` — the scrollbar is the Kotlin app's
+  `AppleScrollbar` (AppleScrollbar.jvm.kt): a 7 px hairline at
+  `rgb(171 171 178 / 0.18)` that lights to `0.55` when the pointer comes for
+  it, thumb never shorter than 26 px, circle-capped, over an invisible
+  track. WebKit pseudo-elements only, and deliberately without the standard
+  `scrollbar-color` pair: a set `scrollbar-width` switches Chromium
+  (WebView2) to its native thin bar — rectangular, unrounded, no hover —
+  and disables the pseudo-element styles outright. The shelves' and the
+  sidebar's hide-outright utilities still outrank everything here;
+  `UpNext`'s `[scrollbar-width:thin]` class is dropped for the same reason
+  (it would have selected the native bar and defeated the Apple one).
+
+## Verification this round
+
+* `pnpm -r typecheck`: clean. `pnpm -r test`: 174/174 (16 new tests:
+  `artworkBackdrop.test.ts` — the java.util.Random LCG and
+  String.hashCode against independently computed reference values, the
+  flip-and-proportions mesh properties, the seam row, seeded rotation,
+  smoothstep control points, the HSL round-trip, the blur's bounded reach,
+  and the nine-tenths-black cover keeping nine-tenths of the mesh dark).
+  `pnpm --filter @bitchord/app build` (tsc + Vite production): clean.
+* Rust: no full compile is possible on this host (no root; pkg-config finds
+  neither gtk/webkit nor dbus), so the changed shell code was verified the
+  earlier rounds' way:
+  * **media.rs compiles verbatim** against a tauri- and souvlaki-shaped
+    harness whose signatures were taken from the locked crate sources
+    (tauri 2.12.5 webview_window.rs:1954/1966/2506/2735, app.rs
+    `run_on_main_thread<F: FnOnce() + Send + 'static>`; souvlaki 0.8.3
+    lib.rs/config.rs/platform\*) — the Linux branch for real, the Windows
+    branch's `hwnd() -> Result<HWND>` + `HWND.0` against the crate source
+    and island.rs's shipped precedent. Kept in
+    `scripts/media_scratch/` of the fix bundle.
+  * **agent.rs's new guard compiles and behaves** in a standalone harness
+    (`scripts/agent_scratch/`): the verbatim `identity_cookies`,
+    `identity_unchanged`, `fingerprint` and `on_service_page` against eight
+    scenarios — the shim's subset report, the identical native dump, a
+    PSIDTS rotation (all unchanged → window stays), the old fingerprint
+    guard firing on the same session (the bug, reproduced), an account
+    switch, an empty baseline (changed → close after verify), the Spotify
+    compare, and the page gating that keeps a foreign session out of a
+    Discord window's report stream.
+  * **chrome.rs's macOS branch** is signature-checked against
+    objc2-app-kit 0.3.2's generated sources: `NSWindow::standardWindowButton
+    (&self, NSWindowButton) -> Option<Retained<NSButton>>` (NSWindow.rs:1645),
+    `NSView::setHidden(&self, bool)` (NSView.rs:255, reachable through
+    NSButton's Deref chain), `NSWindowButton::CloseButton/MiniaturizeButton/
+    ZoomButton` (NSWindow.rs:322-329), and `WebviewWindow::ns_window() ->
+    Result<*mut c_void>` (tauri webview_window.rs:1954). The non-macOS stub
+    compiles in the same harness.
+* The Rust toolchain on this host is rustc 1.99.1; `tauri 2.12.5` declares
+  `rust-version = "1.90"`, and no code this round adds uses anything newer
+  than what the tree already shipped (let-else, cfg attrs on let, inline
+  format args).

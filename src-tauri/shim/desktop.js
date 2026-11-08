@@ -9,10 +9,15 @@
  *     same envelopes, and the core's pushes arrive through a function call
  *     (`__BitChordBridgeEvent`) that this relay re-posts as bridge events.
  *  2. Media session. `navigator.mediaSession` is replaced with a shim wired
- *     to the Rust side so MPRIS (Linux), Now Playing (macOS) and the tray all
- *     see the track. On Windows the page's calls are also passed through to
- *     WebView2's native media session, which owns SMTC and the hardware media
- *     keys there. The shim installs synchronously — the app's first
+ *     to the Rust side so the tray, the Dynamic Island and the platform
+ *     players all see the track. The OS-level players are the shell's own:
+ *     MPRIS on Linux and SMTC on Windows (souvlaki in media.rs), fed by the
+ *     same throttled `media_update` stream the tray reads. The shim does not
+ *     forward anything to the webview's native session — a passthrough to
+ *     WebView2's own media session used to stand in for SMTC on Windows, but
+ *     that session never surfaces at system level, and where the runtime
+ *     does surface it, forwarding would put a second player beside the
+ *     shell's. The shim installs synchronously — the app's first
  *     `setActionHandler` call must land on it.
  *  3. External links. `window.open` and target=_blank anchors go to the
  *     shell: sign-in origins open inside the app's agent window, everything
@@ -28,6 +33,15 @@
  *     else fetches natively first, exactly as on the site, and only a
  *     network-error refusal (a cross-origin host that answers no CORS — the
  *     Listen Together server) retries through the core.
+ *  5. No link previews on macOS. WKWebView hangs a tooltip off every anchor
+ *     with an href — "BitChord / tauri://localhost/home" under the cursor —
+ *     and JavaScript cannot turn that off: the tooltip is computed from the
+ *     hit-tested element, not from any event the page can cancel. What the
+ *     page CAN do is not have the href. On macOS the shim moves every
+ *     anchor's href into data-href (and keeps the element tabbable), which
+ *     kills the tooltip; navigation is untouched, because React Router's
+ *     links are click handlers that never read the attribute, and the
+ *     target=_blank interception below reads data-href as its fallback.
  */
 (function () {
   'use strict';
@@ -98,7 +112,6 @@
   // ---- 2. The media session shim -------------------------------------------
 
   var mediaHandlers = {};
-  var nativeSession = typeof navigator.mediaSession === 'object' ? navigator.mediaSession : null;
   var lastPositionSent = 0;
   var lastPositionValue = 0;
   var lastDurationSent = 0;
@@ -116,10 +129,6 @@
       this.artwork = init.artwork || [];
     };
   }
-
-  var isWindows = function () {
-    return desktop.platform === 'windows' && !!nativeSession;
-  };
 
   var sendMedia = function (payload) {
     invoke('media_update', { update: payload }).catch(function () {});
@@ -153,13 +162,6 @@
         var key = payload ? JSON.stringify(payload) : '';
         if (key !== lastMetaSent) {
           lastMetaSent = key;
-          if (isWindows()) {
-            try {
-              nativeSession.metadata = value;
-            } catch (error) {
-              /* older runtimes */
-            }
-          }
           sendMedia({ kind: 'metadata', metadata: payload });
           // A track switch re-arms the position throttle: the new track's own
           // setPositionState (its durationchange / seeked) must never be the
@@ -169,19 +171,12 @@
         }
       },
       get metadata() {
-        return nativeSession ? nativeSession.metadata : null;
+        return null;
       },
       /** The page assigns 'playing' | 'paused' (and reads it). */
       set playbackState(state) {
         if (state !== lastStateSent) {
           lastStateSent = state;
-          if (isWindows()) {
-            try {
-              nativeSession.playbackState = state;
-            } catch (error) {
-              /* ignore */
-            }
-          }
           sendMedia({ kind: 'playback', state: state });
         }
       },
@@ -190,13 +185,6 @@
       },
       setActionHandler: function (action, handler) {
         mediaHandlers[action] = handler;
-        if (isWindows()) {
-          try {
-            nativeSession.setActionHandler(action, handler);
-          } catch (error) {
-            /* Not every browser knows every action. */
-          }
-        }
       },
       setPositionState: function (state) {
         if (!state) return;
@@ -275,7 +263,9 @@
       }
       if (!node || node === document || node.nodeType !== 1) return;
       if ((node.getAttribute('target') || '').toLowerCase() !== '_blank') return;
-      var href = node.getAttribute('href');
+      // The href may have moved to data-href (§5, the macOS link preview):
+      // both spellings route to the shell.
+      var href = node.getAttribute('href') || node.getAttribute('data-href');
       if (href && /^https?:/i.test(href)) {
         event.preventDefault();
         invoke('open_external', { url: href }).catch(function () {});
@@ -468,5 +458,75 @@
         return pageFetch(url, input, init, { origin: null, xorigin: false, fallback: true });
       });
     };
+  }
+
+  // ---- 5. No link previews on macOS ------------------------------------------
+
+  /**
+   * Moves [element]'s href into data-href, keeping the anchor tabbable so
+   * keyboard navigation and the focus prefetches (PrefetchLink) still see it.
+   * React Router's Link is a click handler that never reads href from the
+   * DOM, so navigation is untouched; the WKWebView tooltip, which reads the
+   * attribute at hit-test time, loses its subject.
+   */
+  var stripLinkPreview = function (element) {
+    var href = element.getAttribute('href');
+    if (href == null) return;
+    element.removeAttribute('href');
+    element.setAttribute('data-href', href);
+    if (!element.hasAttribute('tabindex')) element.setAttribute('tabindex', '0');
+  };
+
+  /** Strips every anchor under [root], [root] itself included. */
+  var stripLinkPreviewTree = function (root) {
+    if (root.nodeType === 1) {
+      if (root.tagName === 'A') stripLinkPreview(root);
+      if (root.querySelectorAll) {
+        var anchors = root.querySelectorAll('a[href]');
+        for (var i = 0; i < anchors.length; i++) stripLinkPreview(anchors[i]);
+      }
+    }
+  };
+
+  var pendingStrip = 0;
+  var installLinkPreviewStrip = function () {
+    if (typeof MutationObserver !== 'function') return;
+    // React writes href back whenever a Link's destination changes, and new
+    // links mount with the app's pages; both re-enter here.
+    var observer = new MutationObserver(function (mutations) {
+      // Coalesced to one pass per frame: a track list mounting fires hundreds
+      // of records, and each one only needs the same tree walk.
+      if (pendingStrip) return;
+      pendingStrip = requestAnimationFrame(function () {
+        pendingStrip = 0;
+        for (var i = 0; i < mutations.length; i++) {
+          var record = mutations[i];
+          if (record.type === 'attributes') {
+            stripLinkPreview(record.target);
+          } else {
+            for (var j = 0; j < record.addedNodes.length; j++) {
+              stripLinkPreviewTree(record.addedNodes[j]);
+            }
+          }
+        }
+      });
+    });
+    observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
+    // The app may have rendered while desktop_info was in flight.
+    stripLinkPreviewTree(document.documentElement);
+  };
+
+  if (typeof MutationObserver !== 'function') {
+    /* ancient engine, no tooltip worth the polyfill */
+  } else if (desktop.platform === 'macos') {
+    installLinkPreviewStrip();
+  } else {
+    // The platform lands asynchronously (desktop_info above); the observer
+    // catches everything rendered before then.
+    invoke('desktop_info')
+      .then(function (info) {
+        if (info.platform === 'macos') installLinkPreviewStrip();
+      })
+      .catch(function () {});
   }
 })();
